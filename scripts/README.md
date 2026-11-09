@@ -16,6 +16,12 @@ python scripts/run_video_qa.py --plans artifacts/EXP-002/score_run01/plans.json 
 python scripts/analyze_video_qa.py --plans artifacts/EXP-002/qa_run01/plans.json --predictions artifacts/EXP-002/qa_run01/predictions.json --output artifacts/EXP-002/qa_run01/report.json
 ```
 
+`score_video_evidence.py` 默认要求输出目录不存在。若运行中断且该目录里已有 `run.json`，可使用相同配置和输出目录加 `--resume` 继续；它会读取已保存的每个候选片段 `score.json`，跳过已经完成的 VLM 打分，并补齐最终候选文件。抽帧会重新检查/生成，尚未写完的打分会重新执行。
+
+```sh
+python scripts/score_video_evidence.py --config configs/exp002.local.json --output artifacts/EXP-002/score_run01 --resume
+```
+
 `run_video_qa.py` starts a fresh run by default and requires a new output directory. To continue an interrupted run, pass the same plans, assets, questions, config, and output directory again with `--resume`; it reads `predictions.partial.json` and skips completed query/policy/budget conditions. It verifies that the requested plans match the saved `plans.json` before continuing. Without `--resume`, an existing output directory is an error, which avoids accidental overwrites.
 
 ```sh
@@ -23,4 +29,5 @@ python scripts/run_video_qa.py --plans artifacts/EXP-002/score_run01/plans.json 
 ```
 
 预算成本是固定质量 JPEG 抽帧文件的字节数，用于离线策略对比，不等于网络实际传输。`score_video_evidence.py --extract-only` 只抽帧，不生成可用计划。运行参数和数据限制见 `../docs/exp-002-query-driven-transmission.md`。
+
 
