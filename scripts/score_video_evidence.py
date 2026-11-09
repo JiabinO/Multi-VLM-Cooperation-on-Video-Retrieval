@@ -16,7 +16,7 @@ from video_evidence import (answer_options, get_runtime, load_mapping, load_ques
 from video_smoke import write_json
 
 
-def run(config_path: Path, output: Path, extract_only: bool = False) -> int:
+def run(config_path: Path, output: Path, extract_only: bool = False, resume: bool = False) -> int:
     config = json.loads(config_path.read_text(encoding="utf-8"))
     ds = config["dataset"]
     if ds.get("name") != "mvvbench":
@@ -28,10 +28,21 @@ def run(config_path: Path, output: Path, extract_only: bool = False) -> int:
     split_cfg = ds.get("split_by_scene", {})
     seed = int(split_cfg.get("seed", 0))
     train_fraction, val_fraction = float(split_cfg.get("train", .6)), float(split_cfg.get("validation", .2))
-    output.mkdir(parents=True, exist_ok=False)
+    if resume:
+        if not output.is_dir() or not (output / "run.json").is_file():
+            raise FileNotFoundError("--resume requires an existing output directory with run.json")
+        previous = json.loads((output / "run.json").read_text(encoding="utf-8"))
+        if previous.get("config") != config:
+            raise ValueError("Cannot resume: config differs from the saved run.json config")
+        if previous.get("extract_only") != extract_only:
+            raise ValueError("Cannot resume: extract_only mode differs from the saved run")
+    else:
+        output.mkdir(parents=True, exist_ok=False)
     started = time.perf_counter()
-    meta = {"status": "running", "experiment_id": "EXP-002", "started_at": datetime.now(timezone.utc).isoformat(),
-            "config_path": str(config_path), "config": config, "python": sys.version, "extract_only": extract_only}
+    meta = (previous if resume else {"experiment_id": "EXP-002", "started_at": datetime.now(timezone.utc).isoformat(),
+            "config_path": str(config_path), "config": config, "python": sys.version, "extract_only": extract_only})
+    meta.update(status="running", last_resumed_at=datetime.now(timezone.utc).isoformat() if resume else None,
+                resume_count=int(meta.get("resume_count", 0)) + (1 if resume else 0))
     write_json(output / "run.json", meta)
     try:
         records = []
@@ -117,13 +128,25 @@ def run(config_path: Path, output: Path, extract_only: bool = False) -> int:
                     if runtime is not None:
                         task_dir = scores_root / qdir / item_id
                         task_dir.mkdir(parents=True, exist_ok=True)
-                        prompt = relevance_prompt(query)
-                        (task_dir / "prompt.txt").write_text(prompt, encoding="utf-8")
-                        vlm_records = [{"absolute_file": f["file"], "label": f"View {view['view']}, time={f['time_s']:.3f}s"} for f in files]
-                        raw, metrics = runtime(vlm_records, int(config["model"]["max_new_tokens"]), task_dir, prompt)
-                        (task_dir / "raw_response.txt").write_text(raw, encoding="utf-8")
-                        score, reason = parse_relevance(raw)
-                        write_json(task_dir / "score.json", {"score": score, "reason": reason, "metrics": metrics})
+                        score_file = task_dir / "score.json"
+                        cached = None
+                        if resume and score_file.is_file():
+                            try:
+                                cached = json.loads(score_file.read_text(encoding="utf-8"))
+                                if not isinstance(cached, dict) or "score" not in cached:
+                                    cached = None
+                            except (OSError, json.JSONDecodeError):
+                                cached = None
+                        if cached is not None:
+                            score, reason, metrics = cached.get("score"), cached.get("reason"), cached.get("metrics")
+                        else:
+                            prompt = relevance_prompt(query)
+                            (task_dir / "prompt.txt").write_text(prompt, encoding="utf-8")
+                            vlm_records = [{"absolute_file": f["file"], "label": f"View {view['view']}, time={f['time_s']:.3f}s"} for f in files]
+                            raw, metrics = runtime(vlm_records, int(config["model"]["max_new_tokens"]), task_dir, prompt)
+                            (task_dir / "raw_response.txt").write_text(raw, encoding="utf-8")
+                            score, reason = parse_relevance(raw)
+                            write_json(score_file, {"score": score, "reason": reason, "metrics": metrics})
                     item = {"item_id": item_id, "view_id": str(view["view"]), "start_s": chunk["start_s"],
                             "end_s": chunk["end_s"], "bytes": chunk["bytes"],
                             "relevance_score": score if score is not None else 0.0}
@@ -161,9 +184,10 @@ def main() -> int:
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--extract-only", action="store_true", help="sample candidate frames but do not load a VLM")
+    parser.add_argument("--resume", action="store_true", help="resume an interrupted scoring run from saved per-unit score.json files")
     args = parser.parse_args()
     try:
-        return run(args.config, args.output, args.extract_only)
+        return run(args.config, args.output, args.extract_only, args.resume)
     except Exception as exc:
         parser.error(str(exc))
     return 2
@@ -171,3 +195,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
