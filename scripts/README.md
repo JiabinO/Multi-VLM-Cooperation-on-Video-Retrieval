@@ -1,20 +1,10 @@
-# 运行入口
+# 实验脚本
 
-后续提供数据检查、小样本运行、服务器批处理与结果导出入口。每个脚本注明参数、工作目录、输入输出、失败恢复和日志位置。
-首个入口：video_smoke.py，执行单路视频抽帧、Qwen3-VL 图像序列推理及证据校验。参数和命令见 ../docs/video-smoke.md；多端联合推理尚未实现。
+查询驱动视频证据实验的运行顺序如下：
 
-Assembly101 事件预处理：phase1_annotations.py 使用 Python 标准库导入官方 fine/coarse action labels，按序列匹配事件到候选时间窗，并生成 8/24 帧三视角人工可见性审核表。字段和服务器命令见 ../docs/phase1-event-screening.md；候选时间映射不会自动标为已验证。
+1. `score_video_evidence.py`：从 MVVBench 问题和映射中构造候选片段、抽取 JPEG 帧，并用配置的 VLM 计算相关性分数。
+2. `select_video_evidence.py`：按预算生成全量输入、均匀时间采样、固定视角采样和查询驱动选择方案。
+3. `run_video_qa.py`：对各方案选出的证据运行 QA 并记录预测和传输字节代理值。
+4. `analyze_video_qa.py`：生成按策略和数据域汇总的准确率、字节量及预算利用率。
 
-MVVBench 下载：先在 Hugging Face 数据集页面接受其非商业研究及遵守来源数据集许可的条件，再运行 `python scripts/download_mvvbench.py`。脚本将问答标注、视频映射和上游整理脚本保存到 `artifacts/mvvbench/`（不进 Git）；优先读取 `HF_TOKEN` 环境变量，也会使用已安装 huggingface_hub 的登录令牌。源视频不包含在 MVVBench 发布包中，须按三套原始数据各自的访问条件下载；脚本生成的 `DOWNLOAD_README.md` 记录后续目录和准备步骤。
-
-EXP-002 VLM 打分：复制 `configs/exp002_budget_sweep.example.json` 为本机忽略文件（如 `configs/exp002.local.json`），填入本地模型、标注、映射、视频和输出路径。`dataset.domains` 可设为 `['egoexo']`、`['mmptrack']` 或二者。先用少量样本检查：
-
-```sh
-python scripts/score_video_evidence.py --config configs/exp002.local.json --output artifacts/EXP-002/score_run01
-python scripts/select_video_evidence.py --candidates artifacts/EXP-002/score_run01/candidate_units.json --config configs/exp002.local.json --output artifacts/EXP-002/score_run01/plans.json
-python scripts/run_video_qa.py --plans artifacts/EXP-002/score_run01/plans.json --assets artifacts/EXP-002/score_run01/candidate_assets.json --questions artifacts/EXP-002/score_run01/evaluation_questions.json --config configs/exp002.local.json --output artifacts/EXP-002/qa_run01
-python scripts/analyze_video_qa.py --plans artifacts/EXP-002/qa_run01/plans.json --predictions artifacts/EXP-002/qa_run01/predictions.json --output artifacts/EXP-002/qa_run01/report.json
-```
-
-预算成本是固定质量 JPEG 抽帧文件的字节数，用于离线策略对比，不等于网络实际传输。`score_video_evidence.py --extract-only` 只抽帧，不生成可用计划。运行参数和数据限制见 `../docs/exp-002-query-driven-transmission.md`。
-
+可复制运行的命令、输入输出说明及指标限制见 [实验说明](../docs/exp-002-query-driven-transmission.md)。视频和模型路径请在本地配置文件中填写。
