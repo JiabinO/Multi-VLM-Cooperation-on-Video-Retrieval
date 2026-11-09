@@ -84,7 +84,7 @@ def run(plans_path: Path, assets_path: Path, questions_path: Path, config_path: 
                 (task / "prompt.txt").write_text(prompt, encoding="utf-8")
                 raw, metrics = runtime(item_records, int(config["model"]["qa_max_new_tokens"]), task, prompt)
                 (task / "raw_response.txt").write_text(raw, encoding="utf-8")
-                answer, confidence = parse_answer(raw)
+                answer, confidence = parse_answer(raw, q["options"])
                 cache[key] = (raw, answer, confidence, metrics)
             q = qmap[qid]
             predictions.append({"query_id": qid, "policy": plan["policy"],
