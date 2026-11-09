@@ -41,6 +41,10 @@ def run(config_path: Path, output: Path, extract_only: bool = False, resume: boo
     started = time.perf_counter()
     meta = (previous if resume else {"experiment_id": "EXP-002", "started_at": datetime.now(timezone.utc).isoformat(),
             "config_path": str(config_path), "config": config, "python": sys.version, "extract_only": extract_only})
+    if resume:
+        meta.pop("finished_at", None)
+        meta.pop("error", None)
+        meta.pop("traceback", None)
     meta.update(status="running", last_resumed_at=datetime.now(timezone.utc).isoformat() if resume else None,
                 resume_count=int(meta.get("resume_count", 0)) + (1 if resume else 0))
     write_json(output / "run.json", meta)
@@ -174,7 +178,7 @@ def run(config_path: Path, output: Path, extract_only: bool = False, resume: boo
     finally:
         if meta.get("status") == "running":
             meta.update(status="failed", error="run exited without completion")
-        meta.setdefault("finished_at", datetime.now(timezone.utc).isoformat())
+        meta["finished_at"] = datetime.now(timezone.utc).isoformat()
         meta["elapsed_seconds"] = time.perf_counter() - started
         write_json(output / "run.json", meta)
 
