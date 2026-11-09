@@ -1,0 +1,45 @@
+{
+  "experiment_id": "EXP-002",
+  "dataset": {
+    "name": "mvvbench",
+    "annotation_path": "<SERVER_PATH_TO_MVVbench_ANNOTATIONS>",
+    "video_mapping_path": "<SERVER_PATH_TO_VIDEO_MAPPING_CSV>",
+    "prepared_video_root": "<SERVER_PATH_TO_PREPARED_VIDEOS>",
+    "domains": ["egoexo", "mmptrack"],
+    "split": "test",
+    "split_by_scene": {"seed": 0, "train": 0.6, "validation": 0.2},
+    "one_question_per_scene": true,
+    "max_questions_per_domain": 4
+  },
+  "budget": {
+    "unit": "per_query_upload_bytes",
+    "fractions_of_full_input": [0.1, 0.2, 0.3, 0.4, 0.6, 0.8, 1.0],
+    "overflow_policy": "reject_selection",
+    "cost_measure": "sampled_jpeg_payload_bytes"
+  },
+  "media": {
+    "chunk_seconds": 8,
+    "frames_per_chunk": 2,
+    "jpeg_quality": 80,
+    "max_image_side": 448,
+    "max_chunks_per_view": 4
+  },
+  "evaluation": {
+    "methods": [
+      "full_input",
+      "uniform_temporal_sampling",
+      "fixed_view_sampling",
+      "query_driven_selection"
+    ],
+    "answer_key_available_to_selector": false,
+    "annotation_views_used_only_to_define_candidate_pool": true,
+    "annotation_timestamps_available_to_selector": false
+  },
+  "model": {
+    "name": "<MODEL_NAME_AND_VERSION>",
+    "model_path": "<SERVER_PATH_TO_LOCAL_QWEN3_VL_MODEL>",
+    "max_new_tokens": 128,
+    "qa_max_new_tokens": 128,
+    "prompt_version": "<PROMPT_VERSION>"
+  }
+}
