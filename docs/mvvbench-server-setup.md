@@ -4,18 +4,19 @@
 
 ## 获取代码
 
-首次克隆：
+从服务器已克隆的项目目录拉取分支：
 
 ```bash
-git clone https://github.com/JiabinO/Multi-VLM-Cooperation-on-Video-Retrieval.git
-cd Multi-VLM-Cooperation-on-Video-Retrieval
+git fetch origin codex/mvvbench-download
+git switch --track origin/codex/mvvbench-download
+git rev-parse HEAD
 ```
 
-已克隆项目时，切换到默认分支并拉取更新：
+首次克隆可使用：
 
 ```bash
-git switch main
-git pull origin main
+git clone --branch codex/mvvbench-download \
+  https://github.com/JiabinO/Multi-VLM-Cooperation-on-Video-Retrieval.git
 ```
 
 ## 下载 MVVBench 标注包

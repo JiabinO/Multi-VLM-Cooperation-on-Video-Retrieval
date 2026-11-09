@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "video_filename": "_8lBR0E_Tx8.mp4",
+  "review_source": "User manual review in this chat, 2026-10-23; not official Video-MME labels",
+  "binding_note": "Filename plus original frame indices; source PNG hashes checked at runtime. Video identity is not cryptographically verified.",
+  "frames": [
+    {"frame_id": 0, "frame_index": 0, "review_status": "confirmed", "note": "FOX SPORTS channel opening; scoreboard absence not verified"},
+    {"frame_id": 1, "frame_index": 128, "review_status": "confirmed", "expected": {"status": "readable", "eng_score": 0, "den_score": 0, "match_clock": "5:39"}},
+    {"frame_id": 2, "frame_index": 257, "review_status": "confirmed", "expected": {"status": "readable", "eng_score": 0, "den_score": 0, "match_clock": "5:43"}},
+    {"frame_id": 3, "frame_index": 385, "review_status": "confirmed", "expected": {"status": "readable", "eng_score": 0, "den_score": 0, "match_clock": "5:48"}},
+    {"frame_id": 4, "frame_index": 514, "review_status": "tentative", "note": "Possibly goal highlight replay; scoreboard unreviewed"},
+    {"frame_id": 5, "frame_index": 642, "review_status": "tentative", "note": "Possibly goal highlight replay; scoreboard unreviewed"},
+    {"frame_id": 6, "frame_index": 771, "review_status": "tentative", "note": "Possibly goal highlight replay; scoreboard unreviewed"},
+    {"frame_id": 7, "frame_index": 899, "review_status": "tentative", "note": "Possibly goal highlight replay; scoreboard unreviewed"}
+  ]
+}

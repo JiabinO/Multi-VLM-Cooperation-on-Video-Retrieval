@@ -17,40 +17,22 @@ def load_questions(path: Path) -> list[dict[str, Any]]:
         elif isinstance(value.get("questions"), list):
             value = value["questions"]
         else:
-            # MVVBench's original JSON groups question rows by sample name.
-            rows = []
-            for sample_name, group in value.items():
-                if not isinstance(group, list):
-                    continue
-                for item in group:
-                    if isinstance(item, dict):
-                        row = dict(item)
-                        if not row.get("sample_name"):
-                            row["sample_name"] = str(sample_name)
-                        rows.append(row)
-            value = rows
+            value = [item for group in value.values() if isinstance(group, list) for item in group]
     if not isinstance(value, list) or not value or not all(isinstance(x, dict) for x in value):
-        raise ValueError("Expected MVVBench question list or sample-keyed object")
+        raise ValueError("Expected MVVBench question list")
     return value
+
 
 def question_id(row: dict[str, Any], index: int) -> str:
     return str(row.get("question_id") or row.get("id") or f"{row['sample_name']}-q{index:05d}")
 
 
 def answer_options(row: dict[str, Any]) -> dict[str, str]:
-    source = row.get("choices")
-    if not isinstance(source, dict):
-        source = row
-    result = {}
-    for letter in "ABCD":
-        value = source.get(letter)
-        if value is None:
-            value = source.get(f"choice_{letter}")
-        if isinstance(value, str) and value.strip():
-            result[letter] = value
-    if len(result) < 2:
-        raise ValueError("Question must have at least two nonempty answer choices")
+    result = {letter: row[f"choice_{letter}"] for letter in "ABCD" if isinstance(row.get(f"choice_{letter}"), str)}
+    if len(result) != 4 or any(not value.strip() for value in result.values()):
+        raise ValueError("Question must have choice_A through choice_D")
     return result
+
 
 def load_mapping(path: Path, domains: list[str]) -> dict[tuple[str, str], list[dict[str, str]]]:
     result: dict[tuple[str, str], list[dict[str, str]]] = {}
@@ -192,17 +174,7 @@ def qa_prompt(question: str, options: dict[str, str]) -> str:
             f"问题：{question}\n选项：\n{option_text}")
 
 
-def parse_answer(raw: str, valid_options: dict[str, str] | set[str] | None = None) -> tuple[str, str]:
-    text = raw.strip()
-    if text.startswith("```") and text.endswith("```"):
-        text = "\n".join(text.splitlines()[1:-1])
-    value = json.loads(text)
-    answer = value.get("answer") if isinstance(value, dict) else None
-    confidence = value.get("confidence", "") if isinstance(value, dict) else ""
-    allowed = set(valid_options) if valid_options is not None else set("ABCD")
-    if answer not in allowed or confidence not in ("low", "medium", "high"):
-        raise ValueError(f"Expected answer in {sorted(allowed)} and confidence low/medium/high")
-    return answer, confidence
+def parse_answer(raw: str) -> tuple[str, str]:
     text = raw.strip()
     if text.startswith("```") and text.endswith("```"):
         text = "\n".join(text.splitlines()[1:-1])

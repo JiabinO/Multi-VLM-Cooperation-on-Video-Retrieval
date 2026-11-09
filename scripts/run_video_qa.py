@@ -15,7 +15,8 @@ from video_smoke import write_json
 
 
 def run(plans_path: Path, assets_path: Path, questions_path: Path, config_path: Path,
-        output: Path, policies: list[str] | None = None, fractions: list[float] | None = None) -> int:
+        output: Path, policies: list[str] | None = None, fractions: list[float] | None = None,
+        resume: bool = False) -> int:
     plans = json.loads(plans_path.read_text(encoding="utf-8"))
     assets = json.loads(assets_path.read_text(encoding="utf-8"))
     questions = json.loads(questions_path.read_text(encoding="utf-8"))
@@ -28,17 +29,56 @@ def run(plans_path: Path, assets_path: Path, questions_path: Path, config_path: 
                       and (fractions is None or float(p["budget_fraction"]) in fractions)]
     if not selected_plans:
         raise ValueError("No plans match requested policies/budget fractions")
-    output.mkdir(parents=True, exist_ok=False)
-    write_json(output / "plans.json", selected_plans)
+
+    def condition_key(row):
+        return (row["query_id"], row["policy"], float(row["budget_fraction"]))
+
+    predictions_path = output / "predictions.partial.json"
+    if resume:
+        if not output.is_dir():
+            raise FileNotFoundError(f"Cannot resume: output directory does not exist: {output}")
+        saved_plans_path = output / "plans.json"
+        if not saved_plans_path.is_file():
+            raise FileNotFoundError(f"Cannot resume: missing saved plan manifest: {saved_plans_path}")
+        saved_plans = json.loads(saved_plans_path.read_text(encoding="utf-8"))
+        requested_by_key = {condition_key(p): p for p in selected_plans}
+        saved_by_key = {condition_key(p): p for p in saved_plans}
+        if requested_by_key != saved_by_key or len(requested_by_key) != len(selected_plans):
+            raise ValueError("Resume plans do not match the plans saved in the output directory")
+
+        # A completed run can also be resumed safely: use its final predictions
+        # as the checkpoint when the partial checkpoint is absent.
+        checkpoint = predictions_path if predictions_path.is_file() else output / "predictions.json"
+        predictions = json.loads(checkpoint.read_text(encoding="utf-8")) if checkpoint.is_file() else []
+        seen = set()
+        for prediction in predictions:
+            key = condition_key(prediction)
+            if key not in saved_by_key:
+                raise ValueError(f"Checkpoint contains a prediction outside the saved plans: {key}")
+            if key in seen:
+                raise ValueError(f"Checkpoint contains a duplicate prediction: {key}")
+            seen.add(key)
+        pending_plans = [p for p in selected_plans if condition_key(p) not in seen]
+        print(f"Resuming: {len(predictions)} completed, {len(pending_plans)} remaining", flush=True)
+    else:
+        output.mkdir(parents=True, exist_ok=False)
+        write_json(output / "plans.json", selected_plans)
+        predictions = []
+        pending_plans = selected_plans
+
     meta = {"status": "running", "experiment_id": "EXP-002", "started_at": datetime.now(timezone.utc).isoformat(),
-            "config": config, "python": sys.version, "n_conditions": len(selected_plans)}
+            "config": config, "python": sys.version, "n_conditions": len(selected_plans),
+            "resume": resume, "n_already_completed": len(predictions)}
     write_json(output / "run.json", meta)
     started = time.perf_counter()
-    predictions, cache = [], {}
+    cache = {}
     try:
-        runtime = get_runtime(Path(config["model"]["model_path"]))
-        meta["runtime"] = runtime.metadata
-        for index, plan in enumerate(selected_plans):
+        if pending_plans:
+            runtime = get_runtime(Path(config["model"]["model_path"]))
+            meta["runtime"] = runtime.metadata
+        else:
+            runtime = None
+        for index, plan in enumerate(pending_plans):
             qid = plan["query_id"]
             if qid not in qmap:
                 raise ValueError(f"No question record for {qid}")
@@ -52,7 +92,7 @@ def run(plans_path: Path, assets_path: Path, questions_path: Path, config_path: 
                     "selected_item_ids": [], "status": "infeasible_budget",
                     "reason": plan.get("infeasible_reason")})
                 write_json(output / "predictions.partial.json", predictions)
-                print(f"{index + 1}/{len(selected_plans)} {qid} {plan['policy']} {plan['budget_fraction']}: infeasible", flush=True)
+                print(f"{len(predictions)}/{len(selected_plans)} {qid} {plan['policy']} {plan['budget_fraction']}: infeasible", flush=True)
                 continue
             key = (qid, tuple(sorted(chosen)))
             metrics, raw, answer, confidence, reused = None, None, None, None, False
@@ -84,7 +124,7 @@ def run(plans_path: Path, assets_path: Path, questions_path: Path, config_path: 
                 (task / "prompt.txt").write_text(prompt, encoding="utf-8")
                 raw, metrics = runtime(item_records, int(config["model"]["qa_max_new_tokens"]), task, prompt)
                 (task / "raw_response.txt").write_text(raw, encoding="utf-8")
-                answer, confidence = parse_answer(raw, q["options"])
+                answer, confidence = parse_answer(raw)
                 cache[key] = (raw, answer, confidence, metrics)
             q = qmap[qid]
             predictions.append({"query_id": qid, "policy": plan["policy"],
@@ -95,7 +135,9 @@ def run(plans_path: Path, assets_path: Path, questions_path: Path, config_path: 
                 "selected_item_ids": chosen, "status": "completed", "raw_response": raw, "metrics": metrics,
                 "reused_identical_input": reused})
             write_json(output / "predictions.partial.json", predictions)
-            print(f"{index + 1}/{len(selected_plans)} {qid} {plan['policy']} {plan['budget_fraction']}: {answer}", flush=True)
+            print(f"{len(predictions)}/{len(selected_plans)} {qid} {plan['policy']} {plan['budget_fraction']}: {answer}", flush=True)
+        if len(predictions) != len(selected_plans):
+            raise RuntimeError(f"Run produced {len(predictions)} of {len(selected_plans)} planned predictions")
         write_json(output / "predictions.json", predictions)
         meta.update(status="completed", finished_at=datetime.now(timezone.utc).isoformat(),
                     elapsed_seconds=time.perf_counter() - started,
@@ -120,10 +162,13 @@ def main() -> int:
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--policies", nargs="+", choices=["full_input", "uniform_temporal_sampling", "fixed_view_sampling", "query_driven_selection"])
     parser.add_argument("--fractions", nargs="+", type=float)
+    parser.add_argument("--resume", action="store_true",
+                        help="resume this output directory from predictions.partial.json; without this flag, start fresh")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     try:
-        return run(args.plans, args.assets, args.questions, args.config, args.output, args.policies, args.fractions)
+        return run(args.plans, args.assets, args.questions, args.config, args.output,
+                   args.policies, args.fractions, args.resume)
     except Exception as exc:
         parser.error(str(exc))
     return 2

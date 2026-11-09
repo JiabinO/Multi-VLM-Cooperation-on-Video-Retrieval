@@ -1,6 +1,6 @@
 # EXP-002：带宽预算下的查询驱动视频证据选择
 
-状态：方案草稿。服务器视频路径、可用问题数、推理模型和编码参数待补充。
+状态：8 题流程试运行已完成；扩展评测尚未完成。试运行结果见 [EXP-002 试运行报告](../results/EXP-002/pilot-run01/report.md)。
 
 ## 研究问题
 
@@ -68,7 +68,7 @@
 ]
 ```
 
-服务器数据路径尚未配置，因此目前不能生成真实候选单元或运行模型问答。路径通过 `*.local.json` 配置；配置中的数据集域可设为 `egoexo`、`mmptrack` 或二者。示例配置限制每域 4 个场景、每场景 1 题、每视角最多 4 个候选时间单元用于先行检查。扩大实验时，将 `one_question_per_scene` 设为 `false`、`max_questions_per_domain` 和 `max_chunks_per_view` 设为 `null`。当前只适配 MVVBench 注释格式，扩展到不同 schema 的数据集时需新增适配器。
+服务器路径已在试运行配置中完成设置。路径通过 `*.local.json` 配置；配置中的数据集域可设为 `egoexo`、`mmptrack` 或二者。当前扩展评测计划使用场景去重的问题集（EgoExo 88 题、MMPTrack 16 题），保持 `one_question_per_scene`，并将 `max_questions_per_domain`、`max_chunks_per_view` 设为 `null`。当前只适配 MVVBench 注释格式，扩展到不同 schema 的数据集时需新增适配器。
 
 ## 当前限制
 

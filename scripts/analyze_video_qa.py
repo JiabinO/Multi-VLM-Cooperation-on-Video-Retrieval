@@ -36,6 +36,9 @@ def summarize(plans: list[dict[str, Any]], predictions: list[dict[str, Any]]) ->
     domain_groups: dict[tuple[str, str, float], list[dict[str, Any]]] = defaultdict(list)
     for key, plan in plan_map.items():
         pred = pred_map[key]
+        # Recompute per condition; the validation loop above also uses a
+        # local named `feasible`, which must not leak into this aggregation loop.
+        feasible = plan.get("feasible", True) and pred.get("status") != "infeasible_budget"
         gold = pred.get("correct_answer")
         if not isinstance(gold, str) or not gold.strip():
             raise ValueError("each prediction row requires correct_answer for analysis")

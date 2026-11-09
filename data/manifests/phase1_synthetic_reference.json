@@ -1,0 +1,63 @@
+[
+  {
+    "schema_version": 1,
+    "query_id": "synthetic-q1",
+    "dataset": "synthetic",
+    "split": "fixture",
+    "query": "Was the base placed before the wheel?",
+    "review_status": "adjudicated",
+    "accepted_answers": [
+      "yes"
+    ],
+    "clips": [
+      {
+        "clip_id": "c1",
+        "session_id": "synthetic-session",
+        "view_id": "v1",
+        "path": "synthetic/v1.mp4",
+        "start_s": 0,
+        "end_s": 5
+      },
+      {
+        "clip_id": "c2",
+        "session_id": "synthetic-session",
+        "view_id": "v2",
+        "path": "synthetic/v2.mp4",
+        "start_s": 0,
+        "end_s": 5
+      },
+      {
+        "clip_id": "c3",
+        "session_id": "synthetic-session",
+        "view_id": "v3",
+        "path": "synthetic/v3.mp4",
+        "start_s": 0,
+        "end_s": 5
+      }
+    ],
+    "required_units": [
+      {
+        "unit_id": "base",
+        "fact": "Base placed first",
+        "alternatives": [
+          [
+            "c1"
+          ],
+          [
+            "c2"
+          ]
+        ]
+      },
+      {
+        "unit_id": "wheel",
+        "fact": "Wheel placed later",
+        "alternatives": [
+          [
+            "c3"
+          ]
+        ]
+      }
+    ],
+    "adjudication_note": "Synthetic tooling fixture; not dataset annotation"
+  }
+]
