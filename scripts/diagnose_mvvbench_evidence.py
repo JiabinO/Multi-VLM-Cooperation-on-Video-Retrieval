@@ -18,7 +18,7 @@ import traceback
 from typing import Any
 
 from video_evidence import (answer_options, get_runtime, load_mapping,
-                            load_questions, parse_answer, question_id,
+                            parse_answer, question_id,
                             safe_video_path, selected_views, qa_prompt)
 
 
@@ -30,7 +30,26 @@ def write_json(path: Path, value: Any) -> None:
 
 
 def annotation_index(path: Path) -> dict[str, dict[str, Any]]:
-    rows = load_questions(path)
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(value, dict) and isinstance(value.get("data"), list):
+        rows = value["data"]
+    elif isinstance(value, dict) and isinstance(value.get("questions"), list):
+        rows = value["questions"]
+    elif isinstance(value, dict):
+        # MVVBench annotation files may be grouped as sample_name -> rows.
+        # Preserve the dictionary key because the per-question records omit it.
+        rows = []
+        for sample, group in value.items():
+            if isinstance(group, list):
+                for row in group:
+                    if isinstance(row, dict):
+                        item = dict(row)
+                        item.setdefault("sample_name", str(sample))
+                        rows.append(item)
+    else:
+        rows = value
+    if not isinstance(rows, list) or not rows or not all(isinstance(row, dict) for row in rows):
+        raise ValueError("Expected MVVBench annotations as a list or sample_name-to-questions mapping")
     result = {}
     for i, row in enumerate(rows):
         qid = question_id(row, i)
