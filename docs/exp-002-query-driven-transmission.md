@@ -68,8 +68,47 @@
 ]
 ```
 
+## 时间戳与视角互补诊断
+
+主实验的策略不读取 `timestamp_start/end`。另设 `scripts/diagnose_mvvbench_evidence.py` 作为 oracle 诊断：按每题标注时间窗截取证据，只把问题、选项和抽出的图像交给 VLM，正确答案只用于离线统计。它分两组条件：
+
+1. **视角消融**：所有标注指定视角、每个单视角、以及逐个移除一个视角；每个保留视角固定抽 4 帧。用于观察多视角是否优于最佳单视角，以及移除某个视角的影响。
+2. **帧数扫描**：固定使用所有指定视角，每个视角均匀抽 1、2、4、8 帧。用于观察增加时间证据是否提升答案正确率，同时记录实际 JPEG 字节数。
+
+非零长度时间窗内，采样点在各等分子区间中心；当标注时间戳起止相同，默认扩展为以该时间点为中心、总长 2 秒的窗口，并在视频边界截断。此参数可用 `--point-window-seconds` 调整。视角与帧数扫描会复用完全相同的“全视角、每视角 4 帧”条件，以便核对结果。输出含 `diagnostic_manifest.json`、可断点续跑的 `predictions.partial.json`、完成版 `predictions.json` 和逐条件任务目录。
+
+服务器先用少量问题确认接口和耗时：
+
+```sh
+python scripts/diagnose_mvvbench_evidence.py \
+  --config configs/exp002.local.json \
+  --questions artifacts/EXP-002/score_run08/evaluation_questions.json \
+  --output artifacts/EXP-002/diagnostic_run01_pilot \
+  --questions-per-domain 2
+```
+
+确认后运行完整问题集；若四小时作业中断，使用同一命令、同一路径并加 `--resume`：
+
+```sh
+python scripts/diagnose_mvvbench_evidence.py \
+  --config configs/exp002.local.json \
+  --questions artifacts/EXP-002/score_run08/evaluation_questions.json \
+  --output artifacts/EXP-002/diagnostic_run01 --resume
+```
+
+可用 `--modes view_ablation` 或 `--modes frame_sweep` 单独运行一组；可用 `--frame-counts 1 2 4 8` 和 `--ablation-frames 4` 显式调整采样量。诊断结论仅适用于“已知正确时间窗”的 oracle 设置，不能据此声称系统能够定位相关事件，也不能把 oracle 条件与不使用时间戳的策略做同信息量比较。
+
+汇总完成的结果：
+
+```sh
+python scripts/analyze_mvvbench_diagnostic.py \
+  --predictions artifacts/EXP-002/diagnostic_run01/predictions.json \
+  --output artifacts/EXP-002/diagnostic_run01/report.json
+```
+
 服务器路径已在试运行配置中完成设置。路径通过 `*.local.json` 配置；配置中的数据集域可设为 `egoexo`、`mmptrack` 或二者。当前扩展评测计划使用场景去重的问题集（EgoExo 88 题、MMPTrack 16 题），保持 `one_question_per_scene`，并将 `max_questions_per_domain`、`max_chunks_per_view` 设为 `null`。当前只适配 MVVBench 注释格式，扩展到不同 schema 的数据集时需新增适配器。
 
 ## 当前限制
 
 MVVBench 可评估多视角问答质量和离线通信量折中，但不包含网络链路带宽变化、并发流、丢包和端到端时延。真实 Mbps、动态带宽分配和实时性能需要后续单独建模/测量。按 MVVBench 与原始视频数据集各自许可使用数据。
+
