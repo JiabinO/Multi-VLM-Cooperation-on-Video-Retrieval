@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 import hashlib
 import json
 import math
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import sys
 import time
 import traceback
@@ -19,7 +19,7 @@ from typing import Any
 
 from video_evidence import (answer_options, get_runtime, load_mapping,
                             parse_answer, question_id,
-                            safe_video_path, selected_views, qa_prompt)
+                            selected_views, qa_prompt)
 
 
 def write_json(path: Path, value: Any) -> None:
@@ -57,6 +57,18 @@ def annotation_index(path: Path) -> dict[str, dict[str, Any]]:
             raise ValueError(f"Duplicate annotation question ID: {qid}")
         result[qid] = row
     return result
+
+
+def mapped_video_path(prepared_root: Path, dataset_root: Path, target: str) -> Path:
+    """Resolve a safe mapping target, allowing dataset-local video symlinks."""
+    rel = PurePosixPath(target)
+    if rel.is_absolute() or ".." in rel.parts or "\\" in target or ":" in target:
+        raise ValueError(f"Unsafe video mapping target: {target}")
+    resolved = (prepared_root / Path(*rel.parts)).resolve()
+    allowed_roots = (prepared_root.resolve(), dataset_root.resolve())
+    if not any(resolved.is_relative_to(base) for base in allowed_roots):
+        raise ValueError(f"Video symlink escapes prepared video and dataset roots: {target} -> {resolved}")
+    return resolved
 
 
 def make_conditions(views: list[str], frame_counts: list[int], ablation_frames: int,
@@ -155,6 +167,7 @@ def run(config_path: Path, questions_path: Path, output: Path, modes: list[str],
     domains = ds.get("domains", [])
     mapping = load_mapping(Path(ds["video_mapping_path"]), domains)
     root = Path(ds["prepared_video_root"])
+    dataset_root = Path(ds["video_mapping_path"]).resolve().parent
     media = config.get("media", {})
     quality, side = int(media.get("jpeg_quality", 80)), int(media.get("max_image_side", 448))
     request_rows = []
@@ -176,7 +189,8 @@ def run(config_path: Path, questions_path: Path, output: Path, modes: list[str],
             domain = matches[0]
         available = mapping.get((sample, domain), [])
         selected = selected_views(ann, available)
-        views = [{"view": x["view"], "path": str(safe_video_path(root, x["target"]))} for x in selected]
+        views = [{"view": x["view"], "path": str(mapped_video_path(root, dataset_root, x["target"]))}
+                 for x in selected]
         for item in views:
             if not Path(item["path"]).is_file():
                 raise FileNotFoundError(item["path"])
