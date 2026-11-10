@@ -30,4 +30,6 @@ python scripts/run_video_qa.py --plans artifacts/EXP-002/score_run01/plans.json 
 
 预算成本是固定质量 JPEG 抽帧文件的字节数，用于离线策略对比，不等于网络实际传输。`score_video_evidence.py --extract-only` 只抽帧，不生成可用计划。运行参数和数据限制见 `../docs/exp-002-query-driven-transmission.md`。
 
+MVVBench 时间戳诊断：`diagnose_mvvbench_evidence.py` 专门检查“标注时间窗内，多个 view 是否互补”以及“帧数增加是否改善回答”。它读取 `evaluation_questions.json` 和原始标注中的 `timestamp_start/end`，在标注时间窗内均匀取帧；视角消融固定每个 view 4 帧，帧数扫描固定全部指定 view，默认每 view 取 1/2/4/8 帧。零长度时间戳默认扩展为以该时刻为中心的 2 秒窗口。该诊断使用 oracle 时间戳，结果不能当作无时间先验的部署策略或与主实验直接等价的基线。完整说明和命令见 `../docs/exp-002-query-driven-transmission.md`。用 `analyze_mvvbench_diagnostic.py --predictions .../predictions.json --output .../report.json` 导出按数据集和条件汇总的准确率、帧数、字节数以及与全视角条件的配对差值。
+
 
