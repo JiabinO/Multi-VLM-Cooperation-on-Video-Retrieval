@@ -38,8 +38,9 @@ def export(run_dir: Path, output: Path, jpeg_quality: int = 95) -> int:
         q = questions[qid]
         qpreds = predictions_by_query[qid]
         all_row = next(x for x in qpreds if x["condition_id"] == "all_views")
-        best_row = next(x for x in qpreds if x["condition_id"] == f"single_view_{next(
-            d['best_single_view'] for d in details if d['query_id'] == qid)}")
+        best_view = next(d["best_single_view"] for d in details if d["query_id"] == qid)
+        best_condition = "single_view_" + str(best_view)
+        best_row = next(x for x in qpreds if x["condition_id"] == best_condition)
         task_hash = hashlib.sha256((qid + "all_views").encode()).hexdigest()[:18]
         lowres_task = run_dir / "tasks" / task_hash
         view_paths = {str(v["view"]): Path(v["path"]) for v in q["views"]}
