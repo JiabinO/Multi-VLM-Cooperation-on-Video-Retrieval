@@ -98,6 +98,19 @@ def make_conditions(views: list[str], frame_counts: list[int], ablation_frames: 
     return conditions
 
 
+def diagnostic_prompt(question: str, options: dict[str, str], mode: str) -> str:
+    prompt = qa_prompt(question, options)
+    if mode == "evidence":
+        prompt += (
+            "\n请在选择答案前核对可见证据：区分问题中的参照物和目标物；需要跨视角对应物体时，"
+            "只有画面中可见的外观或位置线索支持对应，才把它们视为同一目标。不要把某个视角中"
+            "没有出现的信息当作证据；若各视角证据不足或冲突，降低置信度，但仍按要求选择最可能选项。"
+            "不要输出完整推理过程，只给简短、可核查的证据事实及其来源视角。输出 JSON，字段为："
+            "answer、confidence、evidence（简短文字）、evidence_views（视角编号数组）。"
+        )
+    return prompt
+
+
 def sample_timestamp_frames(video: Path, out_dir: Path, start_s: float, end_s: float,
                             nframes: int, jpeg_quality: int, max_image_side: int,
                             point_window_seconds: float) -> list[dict[str, Any]]:
@@ -143,13 +156,20 @@ def sample_timestamp_frames(video: Path, out_dir: Path, start_s: float, end_s: f
 def run(config_path: Path, questions_path: Path, output: Path, modes: list[str],
         frame_counts: list[int], ablation_frames: int, point_window_seconds: float,
         resume: bool, max_questions: int | None = None,
-        questions_per_domain: int | None = None) -> int:
+        questions_per_domain: int | None = None, query_ids: list[str] | None = None,
+        prompt_mode: str = "baseline", condition_ids: list[str] | None = None) -> int:
     config = json.loads(config_path.read_text(encoding="utf-8"))
     ds = config["dataset"]
     annotations = annotation_index(Path(ds["annotation_path"]))
     questions = json.loads(questions_path.read_text(encoding="utf-8"))
     if not isinstance(questions, list) or not questions:
         raise ValueError("--questions must be a nonempty evaluation_questions.json list")
+    if query_ids:
+        by_id = {q.get("query_id"): q for q in questions}
+        missing = sorted(set(query_ids) - set(by_id))
+        if missing:
+            raise ValueError(f"Query IDs not found in evaluation questions: {missing}")
+        questions = [by_id[qid] for qid in query_ids]
     if max_questions is not None:
         if max_questions < 1:
             raise ValueError("--max-questions must be positive")
@@ -195,12 +215,20 @@ def run(config_path: Path, questions_path: Path, output: Path, modes: list[str],
             if not Path(item["path"]).is_file():
                 raise FileNotFoundError(item["path"])
         conds = make_conditions([x["view"] for x in views], frame_counts, ablation_frames, modes)
+        if condition_ids:
+            available_conditions = {x["condition_id"] for x in conds}
+            missing_conditions = sorted(set(condition_ids) - available_conditions)
+            if missing_conditions:
+                raise ValueError(f"Condition IDs unavailable for {qid}: {missing_conditions}")
+            conds_by_id = {x["condition_id"]: x for x in conds}
+            conds = [conds_by_id[cid] for cid in condition_ids]
         request_rows.append({"query_id": qid, "sample_name": sample, "dataset": domain,
                              "question": q["question"], "options": q.get("options") or answer_options(ann),
                              "correct_answer": q.get("correct_answer") or ann.get("correct_answer"),
                              "timestamp_start": start, "timestamp_end": end,
                              "views": views, "conditions": conds})
-    request_signature = hashlib.sha256(json.dumps(request_rows, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+    signature_input = {"requests": request_rows, "prompt_mode": prompt_mode}
+    request_signature = hashlib.sha256(json.dumps(signature_input, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
     output.mkdir(parents=True, exist_ok=True) if resume else output.mkdir(parents=True, exist_ok=False)
     manifest_path = output / "diagnostic_manifest.json"
     pred_path = output / "predictions.partial.json"
@@ -216,7 +244,8 @@ def run(config_path: Path, questions_path: Path, output: Path, modes: list[str],
         write_json(manifest_path, {"request_signature": request_signature,
                    "timestamp_source": str(Path(ds["annotation_path"])), "modes": modes,
                    "frame_counts": frame_counts, "ablation_frames": ablation_frames,
-                   "point_window_seconds": point_window_seconds, "requests": request_rows})
+                   "point_window_seconds": point_window_seconds, "prompt_mode": prompt_mode,
+                   "requests": request_rows})
         predictions, done = [], set()
     total = sum(len(q["conditions"]) for q in request_rows)
     print(f"Timestamp-oracle diagnostic: {len(request_rows)} questions, {total} conditions; resume={resume}", flush=True)
@@ -250,19 +279,29 @@ def run(config_path: Path, questions_path: Path, output: Path, modes: list[str],
                         nbytes += frame["bytes"]
                         sampled_frame_info.append({"view_id": view, "time_s": frame["time_s"],
                                                    "frame_index": frame["frame_index"], "bytes": frame["bytes"]})
-                prompt = qa_prompt(q["question"], q["options"])
+                prompt = diagnostic_prompt(q["question"], q["options"], prompt_mode)
                 (task / "prompt.txt").write_text(prompt, encoding="utf-8")
                 raw, metrics = runtime(records, int(config["model"].get("qa_max_new_tokens", 128)), task, prompt)
                 (task / "raw_response.txt").write_text(raw, encoding="utf-8")
                 answer, confidence = parse_answer(raw)
+                evidence_payload = {}
+                if prompt_mode == "evidence":
+                    parsed = json.loads(raw.strip())
+                    if isinstance(parsed, dict):
+                        evidence_payload = {
+                            "evidence": parsed.get("evidence"),
+                            "evidence_views": parsed.get("evidence_views"),
+                        }
                 predictions.append({"query_id": q["query_id"], "sample_name": q["sample_name"],
                     "dataset": q["dataset"], "condition_id": cond["condition_id"], "mode": cond["mode"],
                     "selected_views": cond["view_ids"], "frames_per_view": cond["frames_per_view"],
+                    "prompt_mode": prompt_mode,
                     "timestamp_start": q["timestamp_start"], "timestamp_end": q["timestamp_end"],
                     "input_frames": len(records), "input_bytes": nbytes, "answer": answer,
                     "sampled_frames": sampled_frame_info,
                     "correct_answer": q["correct_answer"], "correct": answer == q["correct_answer"],
                     "confidence": confidence, "status": "completed", "raw_response": raw, "metrics": metrics})
+                predictions[-1].update(evidence_payload)
                 write_json(pred_path, predictions)
                 done.add(key)
                 print(f"{len(done)}/{total} {q['query_id']} {cond['condition_id']}: {answer} ({nbytes} B)", flush=True)
@@ -298,6 +337,12 @@ def main() -> int:
                         help="run the first N evaluation questions; useful for a pilot")
     parser.add_argument("--questions-per-domain", type=int,
                         help="run the first N questions from each dataset for a balanced pilot")
+    parser.add_argument("--query-ids", nargs="+",
+                        help="run only these exact query IDs from evaluation_questions.json")
+    parser.add_argument("--prompt-mode", choices=["baseline", "evidence"], default="baseline",
+                        help="baseline QA prompt or concise view-grounded evidence prompt")
+    parser.add_argument("--condition-ids", nargs="+",
+                        help="run only selected condition IDs, e.g. all_views single_view_2")
     parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
     if any(x < 1 for x in args.frame_counts) or args.ablation_frames < 1:
@@ -307,7 +352,8 @@ def main() -> int:
     try:
         return run(args.config, args.questions, args.output, args.modes, args.frame_counts,
                    args.ablation_frames, args.point_window_seconds, args.resume,
-                   args.max_questions, args.questions_per_domain)
+                   args.max_questions, args.questions_per_domain, args.query_ids,
+                   args.prompt_mode, args.condition_ids)
     except Exception as exc:
         parser.error(str(exc))
     return 2
