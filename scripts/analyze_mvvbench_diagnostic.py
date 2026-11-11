@@ -8,7 +8,8 @@ from typing import Any
 
 
 def analyze(rows: list[dict[str, Any]]) -> dict[str, Any]:
-    rows = [r for r in rows if r.get("status") == "completed"]
+    rows = [r for r in rows if r.get("status") == "completed"
+            and isinstance(r.get("correct"), bool)]
     groups: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
     by_q_cond = {}
     for row in rows:
@@ -20,6 +21,19 @@ def analyze(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "n": len(items), "accuracy": sum(bool(x["correct"]) for x in items) / len(items),
             "mean_input_frames": sum(x["input_frames"] for x in items) / len(items),
             "mean_input_bytes": sum(x["input_bytes"] for x in items) / len(items)})
+
+    confidence_groups: dict[tuple[str, str, str, str], list[dict[str, Any]]] = {}
+    for row in rows:
+        confidence = row.get("confidence") or "missing"
+        condition = row["condition_id"]
+        mode = row["mode"]
+        for domain in (row.get("dataset", "unknown"), "all"):
+            confidence_groups.setdefault((mode, condition, domain, confidence), []).append(row)
+    confidence_summary = []
+    for (mode, condition, domain, confidence), items in sorted(confidence_groups.items()):
+        confidence_summary.append({"mode": mode, "condition_id": condition,
+            "dataset": domain, "confidence": confidence, "n": len(items),
+            "accuracy": sum(bool(x["correct"]) for x in items) / len(items)})
 
     comparisons = []
     conditions = sorted({r["condition_id"] for r in rows})
@@ -96,7 +110,10 @@ def analyze(rows: list[dict[str, Any]]) -> dict[str, Any]:
                 "frame_condition_wins": sum(bool(a["correct"]) and not bool(b["correct"]) for a, b in paired),
                 "ties": sum(bool(a["correct"]) == bool(b["correct"]) for a, b in paired)})
 
-    return {"n_predictions": len(rows), "conditions": summary, "paired_vs_all_views": comparisons,
+    return {"n_predictions": len(rows), "conditions": summary,
+            "confidence_accuracy_by_bin": confidence_summary,
+            "confidence_note": "Confidence is categorical (low/medium/high); report empirical accuracy per bin. This is not numeric probability calibration.",
+            "paired_vs_all_views": comparisons,
             "best_single_view_oracle": best_single, "paired_frame_sweep_vs_4frames": frame_sweeps,
             "note": "Oracle timestamp diagnostic; results are conditional on the annotated temporal window."}
 
@@ -117,6 +134,11 @@ def main() -> int:
         print(f"{item['dataset']} | {item['condition_id']} | n={item['n']} | "
               f"acc={item['accuracy']:.3f} | frames={item['mean_input_frames']:.1f} | "
               f"bytes={item['mean_input_bytes']:.0f}")
+    print("Empirical accuracy by reported confidence (categorical):")
+    for item in report["confidence_accuracy_by_bin"]:
+        if item["condition_id"] == "all_views":
+            print(f"{item['dataset']} | {item['condition_id']} | {item['confidence']} | "
+                  f"n={item['n']} | accuracy={item['accuracy']:.3f}")
     best = report["best_single_view_oracle"]["overall"]
     if best:
         print("paired all_views vs per-question best single-view oracle: "
