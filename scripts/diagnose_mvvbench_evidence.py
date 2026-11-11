@@ -105,6 +105,7 @@ def diagnostic_prompt(question: str, options: dict[str, str], mode: str) -> str:
             "不选择选项，也不猜测最终答案。只记录帧中直接可见的事实，并说明它们与问题的关系。"
             "按视角区分观察；若需要跨视角对应人物或物体，写明两边可见的匹配依据。没有足够依据时，"
             "明确标记为无法对应。对遮挡、模糊、未出现或左右参照不清的内容写入证据缺口。"
+            "每个视角最多列2条最相关事实，每条只写一句；不要在多个视角重复相同事实。跨视角对应最多列2条。"
             "不要把推断写成观察，不使用外部知识。只输出 JSON："
             "{\"view_observations\":[{\"view_id\":\"视角编号\",\"facts\":[{\"fact\":\"直接可见事实\","
             "\"relevance\":\"与问题的关系\",\"confidence\":\"low|medium|high\"}],"
@@ -187,7 +188,8 @@ def run(config_path: Path, questions_path: Path, output: Path, modes: list[str],
         frame_counts: list[int], ablation_frames: int, point_window_seconds: float,
         resume: bool, max_questions: int | None = None,
         questions_per_domain: int | None = None, query_ids: list[str] | None = None,
-        prompt_mode: str = "baseline", condition_ids: list[str] | None = None) -> int:
+        prompt_mode: str = "baseline", condition_ids: list[str] | None = None,
+        max_new_tokens_override: int | None = None) -> int:
     config = json.loads(config_path.read_text(encoding="utf-8"))
     ds = config["dataset"]
     annotations = annotation_index(Path(ds["annotation_path"]))
@@ -311,15 +313,18 @@ def run(config_path: Path, questions_path: Path, output: Path, modes: list[str],
                                                    "frame_index": frame["frame_index"], "bytes": frame["bytes"]})
                 prompt = diagnostic_prompt(q["question"], q["options"], prompt_mode)
                 (task / "prompt.txt").write_text(prompt, encoding="utf-8")
-                max_new_tokens = int(config["model"].get("qa_max_new_tokens", 128))
+                max_new_tokens = (max_new_tokens_override if max_new_tokens_override is not None
+                                  else int(config["model"].get("qa_max_new_tokens", 128)))
                 if prompt_mode == "evidence_audit":
-                    max_new_tokens = max(max_new_tokens, 384)
+                    max_new_tokens = max(max_new_tokens, 1024)
                 raw, metrics = runtime(records, max_new_tokens, task, prompt)
                 (task / "raw_response.txt").write_text(raw, encoding="utf-8")
                 if prompt_mode == "evidence_audit":
                     answer, confidence = None, None
-                    evidence_payload = {"correct": None,
-                                        "evidence_audit": parse_audit_response(raw)}
+                    audit = parse_audit_response(raw)
+                    if metrics.get("reached_token_limit"):
+                        audit["truncated_at_token_limit"] = True
+                    evidence_payload = {"correct": None, "evidence_audit": audit}
                 else:
                     answer, confidence = parse_answer(raw)
                     evidence_payload = {}
@@ -381,17 +386,21 @@ def main() -> int:
                         help="baseline QA, answer-plus-evidence, or answer-free evidence audit")
     parser.add_argument("--condition-ids", nargs="+",
                         help="run only selected condition IDs, e.g. all_views single_view_2")
+    parser.add_argument("--max-new-tokens", type=int,
+                        help="override generation length; evidence_audit uses at least 1024 tokens")
     parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
     if any(x < 1 for x in args.frame_counts) or args.ablation_frames < 1:
         parser.error("frame counts must be positive integers")
     if not math.isfinite(args.point_window_seconds) or args.point_window_seconds <= 0:
         parser.error("--point-window-seconds must be positive")
+    if args.max_new_tokens is not None and args.max_new_tokens < 1:
+        parser.error("--max-new-tokens must be positive")
     try:
         return run(args.config, args.questions, args.output, args.modes, args.frame_counts,
                    args.ablation_frames, args.point_window_seconds, args.resume,
                    args.max_questions, args.questions_per_domain, args.query_ids,
-                   args.prompt_mode, args.condition_ids)
+                   args.prompt_mode, args.condition_ids, args.max_new_tokens)
     except Exception as exc:
         parser.error(str(exc))
     return 2
