@@ -33,7 +33,7 @@ def export(run_dir: Path, output: Path, jpeg_quality: int = 95) -> int:
     for row in predictions:
         predictions_by_query.setdefault(row["query_id"], []).append(row)
     output.mkdir(parents=True, exist_ok=True)
-    rows = []
+    rows, key_rows = [], []
     for qid, review_group in sorted(discordant.items()):
         q = questions[qid]
         qpreds = predictions_by_query[qid]
@@ -70,28 +70,38 @@ def export(run_dir: Path, output: Path, jpeg_quality: int = 95) -> int:
                 model_paths.append(str(lowres))
             finally:
                 cap.release()
-        rows.append({"review_group": review_group, "query_id": qid, "dataset": q["dataset"],
+        rows.append({"query_id": qid, "dataset": q["dataset"],
             "sample_name": q["sample_name"], "question": q["question"],
             "options": json.dumps(q["options"], ensure_ascii=False),
             "timestamp_start": q["timestamp_start"], "timestamp_end": q["timestamp_end"],
-            "all_views_answer": all_row["answer"], "best_single_view": best_row["selected_views"][0],
-            "best_single_answer": best_row["answer"], "correct_answer": q["correct_answer"],
             "high_resolution_frames": "\n".join(highres_paths),
             "model_input_frames": "\n".join(model_paths)})
-    index = output / "review_index.csv"
-    fields = list(rows[0]) if rows else ["review_group", "query_id", "dataset", "sample_name", "question",
-        "options", "timestamp_start", "timestamp_end", "all_views_answer", "best_single_view",
-        "best_single_answer", "correct_answer", "high_resolution_frames", "model_input_frames"]
+        key_rows.append({"review_group": review_group, "query_id": qid,
+            "all_views_answer": all_row["answer"], "all_views_correct": all_row["correct"],
+            "best_single_view": best_row["selected_views"][0],
+            "best_single_answer": best_row["answer"], "best_single_correct": best_row["correct"],
+            "correct_answer": q["correct_answer"]})
+    index = output / "review_index_blind.csv"
+    fields = list(rows[0]) if rows else ["query_id", "dataset", "sample_name", "question", "options",
+        "timestamp_start", "timestamp_end", "high_resolution_frames", "model_input_frames"]
     with index.open("w", newline="", encoding="utf-8-sig") as stream:
         writer = csv.DictWriter(stream, fieldnames=fields)
         writer.writeheader()
         writer.writerows(rows)
+    key_path = output / "review_answer_key.csv"
+    with key_path.open("w", newline="", encoding="utf-8-sig") as stream:
+        writer = csv.DictWriter(stream, fieldnames=list(key_rows[0]) if key_rows else [
+            "review_group", "query_id", "all_views_answer", "all_views_correct", "best_single_view",
+            "best_single_answer", "best_single_correct", "correct_answer"])
+        writer.writeheader()
+        writer.writerows(key_rows)
     (output / "README.txt").write_text(
-        "Audit-only full-resolution frames from the exact source video frame indices used by the diagnostic.\n"
-        "These images are not model inputs and do not alter predictions. Compare them with model_input_frames.\n"
-        "If still images do not show motion-dependent evidence, inspect the source clip at the timestamp window.\n",
+        "review_index_blind.csv lists questions/options and audit images without predictions or gold answers.\n"
+        "Record your blind review before opening review_answer_key.csv.\n"
+        "Full-resolution frames are from exact source indices used by the diagnostic; compare them with model_input_frames.\n"
+        "Audit images are not model inputs and do not alter predictions. For motion, inspect the source clip at the timestamp window.\n",
         encoding="utf-8")
-    print(f"Exported {len(rows)} discordant queries; index: {index}")
+    print(f"Exported {len(rows)} discordant queries; blind index: {index}; answer key: {key_path}")
     return 0
 
 
