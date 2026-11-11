@@ -99,6 +99,22 @@ def make_conditions(views: list[str], frame_counts: list[int], ablation_frames: 
 
 
 def diagnostic_prompt(question: str, options: dict[str, str], mode: str) -> str:
+    if mode == "evidence_audit":
+        return (
+            "你将看到一个问题允许使用的视频证据帧；每帧标有来源视角。现在只做证据盘点，不回答问题，"
+            "不选择选项，也不猜测最终答案。只记录帧中直接可见的事实，并说明它们与问题的关系。"
+            "按视角区分观察；若需要跨视角对应人物或物体，写明两边可见的匹配依据。没有足够依据时，"
+            "明确标记为无法对应。对遮挡、模糊、未出现或左右参照不清的内容写入证据缺口。"
+            "不要把推断写成观察，不使用外部知识。只输出 JSON："
+            "{\"view_observations\":[{\"view_id\":\"视角编号\",\"facts\":[{\"fact\":\"直接可见事实\","
+            "\"relevance\":\"与问题的关系\",\"confidence\":\"low|medium|high\"}],"
+            "\"limitations\":[\"该视角的证据限制\"]}],"
+            "\"cross_view_links\":[{\"view_ids\":[\"视角编号\",\"视角编号\"],"
+            "\"link_basis\":\"可见的对应依据；无法对应则说明原因\",\"status\":\"supported|uncertain|unsupported\"}],"
+            "\"evidence_gaps\":[\"回答问题仍缺少的可见信息\"],"
+            "\"evidence_sufficiency\":\"sufficient|partial|insufficient\"}.\n"
+            f"问题：{question}"
+        )
     prompt = qa_prompt(question, options)
     if mode == "evidence":
         prompt += (
@@ -109,6 +125,20 @@ def diagnostic_prompt(question: str, options: dict[str, str], mode: str) -> str:
             "answer、confidence、evidence（简短文字）、evidence_views（视角编号数组）。"
         )
     return prompt
+
+
+def parse_audit_response(raw: str) -> dict[str, Any]:
+    text = raw.strip()
+    if text.startswith("```") and text.endswith("```"):
+        lines = text.splitlines()
+        text = "\n".join(lines[1:-1])
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError as exc:
+        return {"parse_error": str(exc), "raw_response": raw}
+    if not isinstance(value, dict):
+        return {"parse_error": "Expected a JSON object", "raw_response": raw}
+    return value
 
 
 def sample_timestamp_frames(video: Path, out_dir: Path, start_s: float, end_s: float,
@@ -281,10 +311,18 @@ def run(config_path: Path, questions_path: Path, output: Path, modes: list[str],
                                                    "frame_index": frame["frame_index"], "bytes": frame["bytes"]})
                 prompt = diagnostic_prompt(q["question"], q["options"], prompt_mode)
                 (task / "prompt.txt").write_text(prompt, encoding="utf-8")
-                raw, metrics = runtime(records, int(config["model"].get("qa_max_new_tokens", 128)), task, prompt)
+                max_new_tokens = int(config["model"].get("qa_max_new_tokens", 128))
+                if prompt_mode == "evidence_audit":
+                    max_new_tokens = max(max_new_tokens, 384)
+                raw, metrics = runtime(records, max_new_tokens, task, prompt)
                 (task / "raw_response.txt").write_text(raw, encoding="utf-8")
-                answer, confidence = parse_answer(raw)
-                evidence_payload = {}
+                if prompt_mode == "evidence_audit":
+                    answer, confidence = None, None
+                    evidence_payload = {"correct": None,
+                                        "evidence_audit": parse_audit_response(raw)}
+                else:
+                    answer, confidence = parse_answer(raw)
+                    evidence_payload = {}
                 if prompt_mode == "evidence":
                     parsed = json.loads(raw.strip())
                     if isinstance(parsed, dict):
@@ -339,8 +377,8 @@ def main() -> int:
                         help="run the first N questions from each dataset for a balanced pilot")
     parser.add_argument("--query-ids", nargs="+",
                         help="run only these exact query IDs from evaluation_questions.json")
-    parser.add_argument("--prompt-mode", choices=["baseline", "evidence"], default="baseline",
-                        help="baseline QA prompt or concise view-grounded evidence prompt")
+    parser.add_argument("--prompt-mode", choices=["baseline", "evidence", "evidence_audit"], default="baseline",
+                        help="baseline QA, answer-plus-evidence, or answer-free evidence audit")
     parser.add_argument("--condition-ids", nargs="+",
                         help="run only selected condition IDs, e.g. all_views single_view_2")
     parser.add_argument("--resume", action="store_true")
