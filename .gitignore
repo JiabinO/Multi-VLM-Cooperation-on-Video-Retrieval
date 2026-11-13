@@ -1,0 +1,57 @@
+# Python and environments
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+
+# Machine-specific settings and credentials
+.env
+.env.*
+!.env.example
+*.local.yaml
+*.local.yml
+*.local.json
+*.pem
+*.key
+credentials*
+secrets*
+
+# Raw data, downloaded models, caches and large runtime outputs
+/data/*
+!/data/README.md
+!/data/manifests/
+/artifacts/*
+!/artifacts/README.md
+/models/
+/checkpoints/
+/.cache/
+/outputs/
+/runs/
+/logs/
+/wandb/
+*.pt
+*.pth
+*.safetensors
+*.onnx
+*.npy
+*.npz
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.zip
+*.tar
+*.gz
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+

@@ -1,0 +1,57 @@
+{
+  "version": "phase1-qa-v1",
+  "status": "frozen_development_questions",
+  "provenance": "Based on user-reviewed observation drafts and follow-up clarifications, frozen before this QA run. Not an independent held-out benchmark.",
+  "session_id": "nusar-2021_action_both_9011-a01_9011_user_id_2021-02-01_153724",
+  "rubric": "按语义和目标对象一致性人工评分：correct / partial / incorrect / uncertain。不得使用字符串准确匹配。帧引用仅用于核查，不加分；各题组件可分别评分。",
+  "questions": [
+    {
+      "id": "W03-Q1", "window": "W03", "source_start_sec": 100,
+      "question": "操作者右手使用什么工具，对模型的哪个部位做什么操作？",
+      "reference_answer": "用螺丝刀拧动模型底部的红色螺丝。",
+      "answer_components": ["螺丝刀", "模型底部的红色螺丝", "拧动"],
+      "scoring_notes": "不要求拧紧或拧松；分别记录工具、对象、动作。C10115 具体螺丝身份的独立可见性未确认。",
+      "evidence_provenance": ["W03_C10095-000 用户修正", "W03_C10118-000 用户修正"]
+    },
+    {
+      "id": "W04-Q1", "window": "W04", "source_start_sec": 140,
+      "question": "操作者拧动黑色组件上的螺丝后，是否将螺丝取下？",
+      "reference_answer": "是，将螺丝从黑色组件上取下。",
+      "answer_components": ["螺丝被取下"],
+      "scoring_notes": "不确定与明确否认分开记录；问题为带先验的诊断题，不单独作为主要总体结论。",
+      "evidence_provenance": ["W04_C10118 用户补充：支持帧 4、5"]
+    },
+    {
+      "id": "W05-Q1", "window": "W05", "source_start_sec": 180,
+      "question": "操作者从桌面拿起的红色零件是什么？",
+      "reference_answer": "红色螺丝。",
+      "answer_components": ["螺丝"],
+      "scoring_notes": "接受螺钉等同义词，不要求重复颜色。C10095 较早阶段手与黑色零件投影重叠，不等于拿起黑色零件。",
+      "evidence_provenance": ["W05_C10115-001 用户修正", "用户后续澄清 W05 伸手阶段"]
+    },
+    {
+      "id": "W05-Q2", "window": "W05", "source_start_sec": 180,
+      "question": "操作者从桌面拿走一颗螺丝前后，桌面上的红色螺丝数量如何变化？",
+      "reference_answer": "从七颗变为六颗。",
+      "answer_components": ["之前七颗", "之后六颗"],
+      "scoring_notes": "只说少一颗记部分正确，不能凭问题提示判计数正确；支持帧未逐项标记。此题含减一先验，单列诊断结果。",
+      "evidence_provenance": ["W05_C10115 用户补充：七颗变六颗"]
+    },
+    {
+      "id": "W06-Q1", "window": "W06", "source_start_sec": 220,
+      "question": "操作者安装零件时，正在安装的零件发生了什么？",
+      "reference_answer": "零件掉落到桌面上。",
+      "answer_components": ["掉落的是零件", "掉到桌面"],
+      "scoring_notes": "整车掉落不能算正确；不要求推断失手原因。C10118 对掉落的独立可见性未知。",
+      "evidence_provenance": ["W06_C10095-000 用户修正", "W06_C10115-000 用户修正", "用户后续澄清完整过程"]
+    },
+    {
+      "id": "W06-Q2", "window": "W06", "source_start_sec": 220,
+      "question": "安装中的零件掉落后，操作者怎样放置车身，并接着做什么？",
+      "reference_answer": "左手将车身放回桌面固定，右手继续安装零件。",
+      "answer_components": ["车身放回桌面固定", "接着继续安装"],
+      "scoring_notes": "主体动作和顺序正确即可；左右手另记辅助核查。问题提示了掉落，不能用本题检验模型是否自行识别掉落。",
+      "evidence_provenance": ["用户后续澄清：悬空持车、零件掉落、放回桌面、继续安装"]
+    }
+  ]
+}
