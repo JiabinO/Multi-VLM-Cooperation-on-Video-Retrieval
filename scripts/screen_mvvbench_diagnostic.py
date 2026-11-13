@@ -241,8 +241,10 @@ def write_outputs(report: dict[str, Any], output_dir: Path) -> None:
         writer = csv.DictWriter(stream, fieldnames=fields)
         writer.writeheader()
         for item in queue:
-            writer.writerow({**item, "signals": "; ".join(
-                f"{s['code']}: {s['detail']}" for s in item["signals"])})
+            csv_row = {key: item.get(key) for key in fields}
+            csv_row["signals"] = "; ".join(
+                f"{s['code']}: {s['detail']}" for s in item["signals"])
+            writer.writerow(csv_row)
     lines = ["# MVVBench 自动筛查结果", "", f"- 输入预测记录：{report['input_rows']}",
              f"- 题目数：{report['query_count']}",
              f"- 含复核信号的题目：{report['queries_with_review_signals']}", "", "## 信号计数", ""]
