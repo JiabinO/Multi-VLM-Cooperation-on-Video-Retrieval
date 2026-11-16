@@ -51,16 +51,20 @@ def image_part(path: Path) -> dict:
     return {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{data}", "detail": "high"}}
 
 
-def request_model(api_key: str, model: str, question: str, displayed_options: list[str],
-                  frames: list[dict], max_tokens: int, timeout: float,
-                  reasoning_effort: str) -> dict:
+def make_prompt(question: str, displayed_options: list[str]) -> str:
     options_text = "\n".join(f"{label}. {text}" for label, text in zip(LABELS, displayed_options))
-    prompt = (
+    return (
         f"Question: {question}\n\nOptions:\n{options_text}\n\n"
         'Choose the best answer. Return only JSON: '
         '{"answer":"A|B|C|D","answer_text":"exact option text"}. '
         "If the visual evidence is insufficient, choose the closest supported option."
     )
+
+
+def request_model(api_key: str, model: str, question: str, displayed_options: list[str],
+                  frames: list[dict], max_tokens: int, timeout: float,
+                  reasoning_effort: str) -> dict:
+    prompt = make_prompt(question, displayed_options)
     content = [{"type": "text", "text": prompt}]
     for i, frame in enumerate(frames, start=1):
         content.append({"type": "text", "text": f"\nImage {i} (View {frame.get('view')}):"})
@@ -100,6 +104,60 @@ def request_model(api_key: str, model: str, question: str, displayed_options: li
         "model": payload.get("model"),
         "request_id": payload.get("id"),
     }
+
+
+class LocalQwenRuntime:
+    def __init__(self, model_path: Path):
+        import torch
+        import transformers
+        from transformers import AutoProcessor, Qwen3VLForConditionalGeneration
+        if not torch.cuda.is_available() or not torch.cuda.is_bf16_supported():
+            raise RuntimeError("Local Qwen inference requires a BF16-capable CUDA GPU")
+        self.torch = torch
+        self.processor = AutoProcessor.from_pretrained(str(model_path), local_files_only=True)
+        self.model = Qwen3VLForConditionalGeneration.from_pretrained(
+            str(model_path), dtype=torch.bfloat16, device_map={"": 0},
+            attn_implementation="sdpa", local_files_only=True).eval()
+        self.model.generation_config.do_sample = False
+        for key in ("temperature", "top_p", "top_k"):
+            setattr(self.model.generation_config, key, None)
+        self.metadata = {"model_path": str(model_path), "torch": torch.__version__,
+                         "transformers": transformers.__version__,
+                         "gpu": torch.cuda.get_device_name(0), "dtype": "bfloat16",
+                         "attention": "sdpa"}
+
+    def generate(self, question: str, displayed_options: list[str], frames: list[dict],
+                 max_tokens: int) -> dict:
+        from PIL import Image
+        content = [{"type": "text", "text": make_prompt(question, displayed_options)}]
+        opened = []
+        try:
+            for i, frame in enumerate(frames, start=1):
+                image = Image.open(frame["model_input_image"]).convert("RGB")
+                opened.append(image)
+                content.extend([
+                    {"type": "text", "text": f"\nImage {i} (View {frame.get('view')}):"},
+                    {"type": "image", "image": image},
+                ])
+            inputs = self.processor.apply_chat_template(
+                [{"role": "user", "content": content}], tokenize=True,
+                add_generation_prompt=True, return_dict=True,
+                return_tensors="pt").to(self.model.device)
+            with self.torch.inference_mode():
+                outputs = self.model.generate(**inputs, max_new_tokens=max_tokens, do_sample=False)
+            generated = outputs[:, inputs["input_ids"].shape[1]:]
+            text = self.processor.batch_decode(
+                generated, skip_special_tokens=True,
+                clean_up_tokenization_spaces=False)[0]
+            token_count = int(generated.shape[1])
+            return {"content": text,
+                    "finish_reason": "length" if token_count >= max_tokens else "stop",
+                    "usage": {"completion_tokens": token_count},
+                    "provider": "local", "model": self.metadata["model_path"],
+                    "request_id": None, "runtime": self.metadata}
+        finally:
+            for image in opened:
+                image.close()
 
 
 def parse_choice(content) -> str | None:
@@ -159,7 +217,10 @@ def main() -> int:
     parser.add_argument("--manifest", required=True, type=Path)
     parser.add_argument("--query-id", required=True)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--backend", choices=("openrouter", "qwen"), default="openrouter")
     parser.add_argument("--model", default=DEFAULT_MODEL)
+    parser.add_argument("--model-path", type=Path,
+                        help="Local Qwen3-VL model path; required for --backend qwen")
     parser.add_argument("--max-tokens", type=int, default=1200)
     parser.add_argument("--timeout", type=float, default=240)
     parser.add_argument("--reasoning-effort", choices=("none", "minimal", "low"), default="none")
@@ -167,8 +228,10 @@ def main() -> int:
     args = parser.parse_args()
 
     api_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
-    if not api_key:
+    if args.backend == "openrouter" and not api_key:
         parser.error("OPENROUTER_API_KEY is not set in this shell")
+    if args.backend == "qwen" and (args.model_path is None or not args.model_path.is_dir()):
+        parser.error("--backend qwen requires a valid --model-path")
 
     report = load_json(args.screening_report)
     manifest = load_json(args.manifest)
@@ -188,7 +251,9 @@ def main() -> int:
         if not paths or any(not p.is_file() for p in paths):
             parser.error(f"Missing input frame file(s) for {condition['condition_id']}")
 
-    signature = query_signature(query, options, conditions, args.model)
+    model_label = args.model if args.backend == "openrouter" else str(args.model_path.resolve())
+    signature = query_signature(query, options, conditions, f"{args.backend}:{model_label}")
+    local_runtime = LocalQwenRuntime(args.model_path) if args.backend == "qwen" else None
     args.output.parent.mkdir(parents=True, exist_ok=True)
     results: list[dict] = []
     if args.output.exists():
@@ -220,8 +285,11 @@ def main() -> int:
         print(f"[{index}/{len(tasks)}] {cid} order={'-'.join(perm)}", flush=True)
         started = time.time()
         try:
-            response = request_model(api_key, args.model, query["question"], displayed,
-                                     frames, args.max_tokens, args.timeout, args.reasoning_effort)
+            if local_runtime is not None:
+                response = local_runtime.generate(query["question"], displayed, frames, args.max_tokens)
+            else:
+                response = request_model(api_key, args.model, query["question"], displayed,
+                                         frames, args.max_tokens, args.timeout, args.reasoning_effort)
             record.update(response)
             answer = parse_choice(response.get("content"))
             record["selected_display_label"] = answer
@@ -247,7 +315,8 @@ def main() -> int:
             "question": query["question"],
             "original_options": options,
             "gold_answer": query.get("correct_answer"),
-            "model_requested": args.model,
+            "backend": args.backend,
+            "model_requested": model_label,
             "signature": signature,
             "method": "All 24 permutations per single-view condition; temperature=0.",
             "interpretation_note": "First-position rate is a position-bias indicator, not proof by itself. Each prompt uses the same images/question and changes only option ordering.",
