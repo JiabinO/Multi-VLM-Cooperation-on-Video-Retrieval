@@ -16,14 +16,14 @@
 
 ## 服务器运行
 
-将脚本放入服务器仓库的 `scripts/` 后，在 `vlm_redundancy` 环境运行。以下路径使用此前足球案例已经抽取的 View 2 / View 3 单帧；若文件位置不同，替换成对应的人工检查过的图片。
+将脚本放入服务器仓库的 `scripts/` 后，在 `vlm_redundancy` 环境运行。以下命令使用 `64pm_industry_safety_4-q01281` 的 `all_views_frames_2` 条件中 View 0 与 View 3 的第一帧；这两个 view 的图片来自同一道题、同一条件。
 
 ```bash
 python scripts/diagnose_pairwise_view_relation.py \
-  --image-a artifacts/EXP-002/diagnostic_run01/tasks/c09a0454c987525ea4/view_2/frame_000.jpg \
-  --image-b artifacts/EXP-002/diagnostic_run01/tasks/865a709c00cebdf52e/view_3/frame_000.jpg \
+  --image-a artifacts/EXP-002/diagnostic_run01/tasks/d7d0d2d33a4234e6a1/view_0/frame_000.jpg \
+  --image-b artifacts/EXP-002/diagnostic_run01/tasks/d7d0d2d33a4234e6a1/view_3/frame_000.jpg \
   --model-path /home/scc/pb22111667/models/Qwen3-VL-8B-Instruct \
-  --anchors "the same man wearing the black number-7 jersey (identity anchor only; his position may change)" \
+  --anchors "在两张图中人工确认的共同实体或固定地标；请替换为实际核验内容" \
   --output artifacts/EXP-002/diagnostic_run01/pairwise_view_relation_qwen8b.json
 ```
 
