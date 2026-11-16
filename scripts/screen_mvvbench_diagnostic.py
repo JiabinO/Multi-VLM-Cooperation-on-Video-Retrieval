@@ -10,9 +10,11 @@ import argparse
 import csv
 import hashlib
 import json
+import os
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 
 def read_json(path: Path) -> Any:
@@ -231,6 +233,16 @@ def analyze(rows: list[dict[str, Any]], run_dir: Path,
                 "comparable only when model, prompt, sampled frames, and decoding settings match.")}
 
 
+def markdown_image_link(image_path: str | None, output_dir: Path, label: str) -> str:
+    if not image_path:
+        return f"`{label}` (image file unavailable)"
+    target = Path(image_path)
+    relative = os.path.relpath(target, output_dir).replace(os.sep, "/")
+    url = quote(relative, safe="/.-_#")
+    alt = label.replace("[", "(").replace("]", ")")
+    return f"[![{alt}]({url})]({url})"
+
+
 def write_outputs(report: dict[str, Any], output_dir: Path) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "screening_report.json").write_text(
@@ -256,6 +268,27 @@ def write_outputs(report: dict[str, Any], output_dir: Path) -> None:
               "各条件的准确率、输入帧/字节统计、置信度分桶，以及题目级答案、帧时间和模型输入图像路径见 `screening_report.json`。",
               "建议先人工复核高优先级题，再覆盖不同信号类别和数据集。", ""]
     (output_dir / "README.md").write_text("\n".join(lines), encoding="utf-8")
+
+    gallery = ["# MVVBench 复核图库", "",
+               "在 VS Code 中打开本文件的 Markdown 预览（Ctrl+Shift+V）。点击缩略帧可打开对应模型输入图像。",
+               "图像均来自原诊断运行的 tasks 目录；这只是便于复核的链接，不会重新运行模型。", ""]
+    for item in queue:
+        gallery += [f"## {item['query_id']}", "",
+                    f"- 数据集/场景：{item['dataset']} / {item.get('sample_name') or 'unknown'}",
+                    f"- 优先级：{item['priority']}（筛查分 {item['priority_score']}）",
+                    f"- 问题：{item.get('question') or '（manifest 中没有问题文本）'}", "- 触发信号："]
+        gallery.extend(f"  - `{s['code']}`：{s['detail']}" for s in item["signals"])
+        for condition in item["conditions"]:
+            gallery += ["", f"### {condition['condition_id']}",
+                        f"答案：**{condition.get('answer')}**；正确：**{condition.get('correct')}**；"
+                        f"置信度：{condition.get('confidence')}；输入帧：{condition.get('input_frames')}；"
+                        f"字节：{condition.get('input_bytes')}"]
+            for frame in condition["sampled_frames"]:
+                label = (f"view {frame.get('view')} | t={frame.get('time_s')}s | "
+                         f"frame={frame.get('frame_index')}")
+                gallery += ["", markdown_image_link(frame.get("model_input_image"), output_dir, label), ""]
+        gallery += ["", "---", ""]
+    (output_dir / "review_queue.md").write_text("\n".join(gallery), encoding="utf-8")
 
 
 def main() -> int:
