@@ -114,3 +114,21 @@ python scripts/diagnose_mvvbench_question_reasoning.py \
 
 只把“同一场景、不同机位”作为已知前提；仍要求模型用可核验的实体对应和位置证据作答。若它把相似但不同的三脚架、红箱或人物强行对应，或图像无法确定世界方向，应记录为对应错误或证据不足，不把正确选项本身当成推理成功。
 
+## High-value 干扰候选的小规模提示词试跑
+
+对筛选出的“`all_views_frames_2` 答错、至少一个 `single_view_*` 答对”候选题，先做 5 题试跑。每题从旧结果中选一个答对的单视角，并用该题 `all_views_frames_2` 中该视角的同两帧建立匹配帧数对照；多视角条件也复用这些完全相同的帧。脚本自动核验候选标签，单视角两帧重跑后会揭示旧的单视角优势能否在匹配帧数下保留。
+
+每题依次运行 4 条件：`matched_single_view`（匹配帧数单视角 QA）、`baseline_multiview`（原始 QA 提示）、`same_scene_prior`（原始 QA 提示只加同场景先验）、`entity_link_reasoning`（同场景先验加公共实体匹配与关系整合步骤）。前三个 QA 使用相同的原始答案 JSON 格式；实体推理条件额外要求证据结构化输出。模型只加载一次；每个条件完成后写入结果，支持 `--resume`。
+
+首轮建议候选：`64pm_industry_safety_4-q01281`、`63am_industry_safety_2-q01180`、`64pm_retail_3-q01310`、`iiith_soccer_016_4-q00488`、`uniandes_dance_016_34-q00822`。运行前脚本会核验每题是否满足原候选筛选条件，并确认图像帧存在；若某题不符合，应从参数中移除并换入清单中的其他题。
+
+```bash
+python scripts/run_mvvbench_prompt_pilot.py \
+  --diagnostic-dir artifacts/EXP-002/diagnostic_run01 \
+  --query-ids 64pm_industry_safety_4-q01281 63am_industry_safety_2-q01180 64pm_retail_3-q01310 iiith_soccer_016_4-q00488 uniandes_dance_016_34-q00822 \
+  --model-path /home/scc/pb22111667/models/Qwen3-VL-8B-Instruct \
+  --output artifacts/EXP-002/diagnostic_run01/prompt_pilot_run01
+```
+
+服务器四小时任务中断时，用相同参数和输出路径加 `--resume`。解读时分别报告基线答案变化、匹配帧单视角是否仍正确、公共实体是否匹配准确、关系推断是否有效。只有新提示答对且人工核实证据链有效，才计为“有证据支持的纠正”；5 题仅作流程试跑，不做总体统计结论。
+
