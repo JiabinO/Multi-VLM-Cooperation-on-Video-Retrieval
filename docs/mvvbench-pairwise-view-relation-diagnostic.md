@@ -61,3 +61,32 @@ python scripts/diagnose_anchor_displacement.py \
 
 此细化脚本记录原始 JSON 并支持 `--resume`，不自动判定位置正确与否；需人工对照原始两张图检查。详细的设计解释和输入顺序判读见实验备忘录。
 
+## 回到原题：证据化回答对照
+
+前面的锚点位移试测没有区分力：提示把“同一场景、不同机位”作为已知条件，且模型只给两个都落在画面下方中央的锚点报九宫格位置。它不能回答原题中模型为何选错方向。
+
+下一步直接对 `64pm_industry_safety_4-q01281` 做三条件对照：仅 View 0、仅 View 3、View 0+View 3。每个条件使用完全相同的两帧/视角（推荐时间约 0.267s 和 0.733s），问题和选项保持原样。题目是：
+
+> Relative to the camera that captured view3, in which direction is the camera that captured view0 located?
+
+选项为 A. Left；B. Front；C. Back；D. Right。标注答案 A 只作为运行后对照，脚本不会把它放进 prompt。模型需逐图列出直接可见事实、跨图对应依据、从证据到方位选项的简短推理摘要、排除项和不确定性。此处要求可核对的证据摘要，不要求隐藏的逐字思维链。
+
+服务器运行脚本时，把 `--view0` 和 `--view3` 分别重复两次，依次传入该题 `all_views_frames_2` 条件下对应 view 的两帧。帧路径必须是同一个条件目录中的相同时间采样，不能把其他题或单视角任务目录中的帧混入。输出会逐条件保存到 JSON，支持用相同参数加 `--resume` 续跑：
+
+```bash
+python scripts/diagnose_mvvbench_question_reasoning.py \
+  --query-id 64pm_industry_safety_4-q01281 \
+  --question "Relative to the camera that captured view3, in which direction is the camera that captured view0 located?" \
+  --choice "A=Left" --choice "B=Front" --choice "C=Back" --choice "D=Right" \
+  --gold A \
+  --view0 artifacts/EXP-002/diagnostic_run01/tasks/d7d0d2d33a4234e6a1/view_0/frame_000.jpg \
+  --view0 artifacts/EXP-002/diagnostic_run01/tasks/d7d0d2d33a4234e6a1/view_0/frame_001.jpg \
+  --view3 artifacts/EXP-002/diagnostic_run01/tasks/d7d0d2d33a4234e6a1/view_3/frame_000.jpg \
+  --view3 artifacts/EXP-002/diagnostic_run01/tasks/d7d0d2d33a4234e6a1/view_3/frame_001.jpg \
+  --model-path /home/scc/pb22111667/models/Qwen3-VL-8B-Instruct \
+  --max-new-tokens 1200 \
+  --output artifacts/EXP-002/diagnostic_run01/question_reasoning_64pm_industry_safety_4_qwen8b.json
+```
+
+上面的任务哈希和帧文件名需以服务器实际存在的目录为准；如果 `frame_001.jpg` 不存在，先列出对应 `view_0/`、`view_3/` 中的文件，选出约 0.267s 与 0.733s 的两帧，并保持三个条件输入不变。解释结果时，先检查模型是否正确读出每张图里的空间线索和跨图实体对应，再看它是否把人物朝向、画面左右与相机方向混为一谈；三条件差异用于定位错误发生在哪一步，单题结果不外推为总体结论。
+
