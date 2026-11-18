@@ -117,7 +117,9 @@ def main() -> int:
     output.parent.mkdir(parents=True, exist_ok=True)
     runtime = get_runtime(args.model_path)
     print(f"Inspecting {args.query_id}: {len(records)} frames from Views {', '.join(views)}", flush=True)
-    raw, metrics = runtime(records, args.max_new_tokens, output.parent / (output.stem + "_runtime"), prompt)
+    runtime_dir = output.parent / (output.stem + "_runtime")
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    raw, metrics = runtime(records, args.max_new_tokens, runtime_dir, prompt)
     write_json(output, {
         "query_id": args.query_id,
         "question": q.get("question"),
