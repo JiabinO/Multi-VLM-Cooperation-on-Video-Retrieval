@@ -118,7 +118,7 @@ python scripts/diagnose_mvvbench_question_reasoning.py \
 
 对筛选出的“`all_views_frames_2` 答错、至少一个 `single_view_*` 答对”候选题，先做 5 题试跑。每题从旧结果中选一个答对的单视角，并用该题 `all_views_frames_2` 中该视角的同两帧建立匹配帧数对照；多视角条件也复用这些完全相同的帧。脚本自动核验候选标签，单视角两帧重跑后会揭示旧的单视角优势能否在匹配帧数下保留。
 
-每题依次运行 4 条件：`matched_single_view`（匹配帧数单视角 QA）、`baseline_multiview`（原始 QA 提示）、`same_scene_prior`（原始 QA 提示只加同场景先验）、`entity_link_reasoning`（同场景先验加公共实体匹配与关系整合步骤）。前三个 QA 使用相同的原始答案 JSON 格式；实体推理条件额外要求证据结构化输出。模型只加载一次；每个条件完成后写入结果，支持 `--resume`。
+每题依次运行 4 条件：`matched_single_view`（匹配帧数单视角 QA）、`baseline_multiview`（原始 QA 提示）、`same_scene_prior`（原始 QA 提示只加同场景先验）、`entity_link_reasoning`（同场景先验加公共实体匹配与关系整合步骤）。前三个 QA 使用相同的原始答案 JSON 格式；实体推理条件额外要求证据结构化输出。模型只加载一次；每个条件完成后写入 `prompt_pilot_run01/pilot_results.json`，支持 `--resume`。
 
 首轮建议候选：`64pm_industry_safety_4-q01281`、`63am_industry_safety_2-q01180`、`64pm_retail_3-q01310`、`iiith_soccer_016_4-q00488`、`uniandes_dance_016_34-q00822`。运行前脚本会核验每题是否满足原候选筛选条件，并确认图像帧存在；若某题不符合，应从参数中移除并换入清单中的其他题。
 
