@@ -190,6 +190,8 @@ def main() -> int:
         "view3_only": [(f"View 3 frame {i + 1}", p) for i, p in enumerate(args.view3)],
         "both_views": ([(f"View 0 frame {i + 1}", p) for i, p in enumerate(args.view0)] +
                        [(f"View 3 frame {i + 1}", p) for i, p in enumerate(args.view3)]),
+        "both_views_same_scene": ([(f"View 0 frame {i + 1}", p) for i, p in enumerate(args.view0)] +
+                                  [(f"View 3 frame {i + 1}", p) for i, p in enumerate(args.view3)]),
     }
     basis = {
         "query_id": args.query_id, "question": args.question, "choices": choices,
