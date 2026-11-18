@@ -90,3 +90,27 @@ python scripts/diagnose_mvvbench_question_reasoning.py \
 
 上面的任务哈希和帧文件名需以服务器实际存在的目录为准；如果 `frame_001.jpg` 不存在，先列出对应 `view_0/`、`view_3/` 中的文件，选出约 0.267s 与 0.733s 的两帧，并保持三个条件输入不变。解释结果时，先检查模型是否正确读出每张图里的空间线索和跨图实体对应，再看它是否把人物朝向、画面左右与相机方向混为一谈；三条件差异用于定位错误发生在哪一步，单题结果不外推为总体结论。
 
+### 已知同场景条件
+
+上一轮 `both_views` 未告知共同场景先验，因此模型没有建立实体对应。这一轮只新增 `both_views_same_scene`：明确告知同场景、不同机位，要求模型逐图列出固定地标及九宫格位置，再说明跨图实体对应依据和方位推断。为节省时间，不重跑单视角和旧的双视角条件；与上一轮 `both_views` 结果作案例级对照。
+
+先用同一组图像重复参数中的四个 `--view0/--view3` 路径，输出到新的文件：
+
+```bash
+python scripts/diagnose_mvvbench_question_reasoning.py \
+  --conditions both_views_same_scene \
+  --query-id 64pm_industry_safety_4-q01281 \
+  --question "Relative to the camera that captured view3, in which direction is the camera that captured view0 located?" \
+  --choice "A=Left" --choice "B=Front" --choice "C=Back" --choice "D=Right" \
+  --gold A \
+  --view0 artifacts/EXP-002/diagnostic_run01/tasks/d7d0d2d33a4234e6a1/view_0/frame_000.jpg \
+  --view0 artifacts/EXP-002/diagnostic_run01/tasks/d7d0d2d33a4234e6a1/view_0/frame_001.jpg \
+  --view3 artifacts/EXP-002/diagnostic_run01/tasks/d7d0d2d33a4234e6a1/view_3/frame_000.jpg \
+  --view3 artifacts/EXP-002/diagnostic_run01/tasks/d7d0d2d33a4234e6a1/view_3/frame_001.jpg \
+  --model-path /home/scc/pb22111667/models/Qwen3-VL-8B-Instruct \
+  --max-new-tokens 1200 \
+  --output artifacts/EXP-002/diagnostic_run01/question_reasoning_64pm_known_scene_qwen8b.json
+```
+
+只把“同一场景、不同机位”作为已知前提；仍要求模型用可核验的实体对应和位置证据作答。若它把相似但不同的三脚架、红箱或人物强行对应，或图像无法确定世界方向，应记录为对应错误或证据不足，不把正确选项本身当成推理成功。
+
