@@ -20,8 +20,41 @@ def load_image(path: Path):
     return Image.open(path).convert("RGB")
 
 
-def build_prompt(question: str, choices: dict[str, str]) -> str:
+def build_prompt(question: str, choices: dict[str, str], condition: str) -> str:
     choice_text = "\n".join(f"{key}. {value}" for key, value in choices.items())
+    if condition == "both_views_same_scene":
+        return f"""Answer the multiple-choice question using the supplied images.
+
+Known task context: View 0 and View 3 are images of the same scene captured by different cameras. Use that as given; do not spend the answer deciding whether they show the same scene. This does NOT mean every similar-looking object is the same physical entity.
+
+Question: {question}
+
+Choices:
+{choice_text}
+
+Analyze in this order:
+1. For each view separately, list directly visible scene landmarks and their image positions (left/center/right and foreground/middle/background). Prefer stable, distinctive landmarks. Do not treat repeated generic objects, people, or tripods as matched unless specific visual details support the match.
+2. List candidate entities matched across views. For each, state the visible matching basis and its position/relations in each image. Mark uncertain matches as uncertain; do not force a correspondence.
+3. Use only reliable shared landmarks and visible layout/occlusion cues to reason about the relative camera location. Keep image coordinates separate from scene directions and from a person's anatomical left/right. State the reference convention you use for left/right/front/back. If the images do not contain enough geometric cues to establish a direction, say that the direction is indeterminate from these images.
+4. Select an option only if the evidence supports it. Distinguish observations from inferences and briefly explain why plausible alternatives are excluded.
+
+Return valid JSON only, using this schema:
+{{
+  "per_image_observations": [
+    {{"image": "View 0", "landmarks": [{{"entity": "...", "image_position": "...", "relations": ["..."], "distinctive_details": "..."}}]}},
+    {{"image": "View 3", "landmarks": [{{"entity": "...", "image_position": "...", "relations": ["..."], "distinctive_details": "..."}}]}}
+  ],
+  "cross_view_links": [{{"entity_in_view0": "...", "entity_in_view3": "...", "matching_basis": "...", "match_confidence": "low|medium|high", "position_view0": "...", "position_view3": "..."}}],
+  "camera_relation_reasoning": ["Short, checkable steps from matched landmarks to the camera direction; separate observation from inference."],
+  "reference_convention": "...",
+  "eliminated_choices": [{{"choice": "...", "reason": "..."}}],
+  "answer": "A|B|C|D|cannot determine",
+  "confidence": "low|medium|high",
+  "limitations": ["..."]
+}}
+
+Keep the evidence concise and checkable. Do not invent landmarks or claim precise camera geometry that the images do not establish. Do not report private internal chain-of-thought; provide only observations and a brief rationale summary."""
+
     return f"""Answer the multiple-choice question using only the supplied image(s).
 
 Question: {question}
@@ -122,6 +155,12 @@ def main() -> int:
     parser.add_argument("--model-path", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--max-new-tokens", type=int, default=700)
+    parser.add_argument(
+        "--conditions", nargs="+",
+        choices=("view0_only", "view3_only", "both_views", "both_views_same_scene"),
+        default=("view0_only", "view3_only", "both_views", "both_views_same_scene"),
+        help="Conditions to run. Use only both_views_same_scene to add the known-scene reasoning test.",
+    )
     parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
 
@@ -160,7 +199,7 @@ def main() -> int:
                           for label, path in selected]
                    for name, selected in views.items()},
         "model_path": str(args.model_path.resolve()), "max_new_tokens": args.max_new_tokens,
-        "conditions": list(views),
+        "conditions": list(args.conditions),
     }
     signature = hashlib.sha256(json.dumps(basis, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
     args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -173,20 +212,20 @@ def main() -> int:
             parser.error("Existing output belongs to different question/images/model/settings")
         results = saved.get("results", [])
 
+    selected_conditions = {key: views[key] for key in args.conditions}
     done = {row.get("condition") for row in results if row.get("status") == "completed"}
     runtime = QwenRuntime(args.model_path)
-    print(f"Model: {runtime.metadata['model_path']}; calls remaining: {len(views) - len(done)}/3", flush=True)
-    prompt = build_prompt(args.question, choices)
-    for condition, selected in views.items():
+    print(f"Model: {runtime.metadata['model_path']}; calls remaining: {len(selected_conditions) - len(done)}/{len(selected_conditions)}", flush=True)
+    for condition, selected in selected_conditions.items():
         if condition in done:
             continue
-        print(f"[{len(done) + 1}/3] {condition} ({len(selected)} frame(s))", flush=True)
+        print(f"[{len(done) + 1}/{len(selected_conditions)}] {condition} ({len(selected)} frame(s))", flush=True)
         row = {"condition": condition,
                "input_images": [{"label": label, "path": str(path.resolve())} for label, path in selected],
-               "prompt": prompt, "status": "error"}
+               "prompt": build_prompt(args.question, choices, condition), "status": "error"}
         started = time.time()
         try:
-            response = runtime.generate(prompt, selected, args.max_new_tokens)
+            response = runtime.generate(row["prompt"], selected, args.max_new_tokens)
             row.update(response)
             row["status"] = "truncated" if response["finish_reason"] == "length" else "completed"
         except Exception as exc:
