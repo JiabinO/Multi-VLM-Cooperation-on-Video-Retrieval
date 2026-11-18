@@ -120,6 +120,8 @@ python scripts/diagnose_mvvbench_question_reasoning.py \
 
 每题依次运行 4 条件：`matched_single_view`（匹配帧数单视角 QA）、`baseline_multiview`（原始 QA 提示）、`same_scene_prior`（原始 QA 提示只加同场景先验）、`entity_link_reasoning`（同场景先验加公共实体匹配与关系整合步骤）。前三个 QA 使用相同的原始答案 JSON 格式；实体推理条件额外要求证据结构化输出。模型只加载一次；每个条件完成后写入 `prompt_pilot_run01/pilot_results.json`，支持 `--resume`。
 
+第二轮在同一脚本中新增 `entity_link_reasoning_9grid`，并保留旧的 `entity_link_reasoning` 作为同轮提示对照。新提示要求每个公共实体分别标注九宫格位置、相对其他实体的位置，以及从一个视角到另一个视角的水平/垂直画面位移和依据；同时要求把画面坐标变化与真实机位方向分开。这样可以直接判断更细的位置记录是否改变实体匹配、方向推断或答案。输出使用新的 `prompt_pilot_run02` 目录，避免覆盖首轮记录。
+
 首轮建议候选：`64pm_industry_safety_4-q01281`、`63am_industry_safety_2-q01180`、`64pm_retail_3-q01310`、`iiith_soccer_016_4-q00488`、`uniandes_dance_016_34-q00822`。运行前脚本会核验每题是否满足原候选筛选条件，并确认图像帧存在；若某题不符合，应从参数中移除并换入清单中的其他题。
 
 ```bash
@@ -129,6 +131,18 @@ python scripts/run_mvvbench_prompt_pilot.py \
   --model-path /home/scc/pb22111667/models/Qwen3-VL-8B-Instruct \
   --output artifacts/EXP-002/diagnostic_run01/prompt_pilot_run01
 ```
+
+第二轮使用相同题目、帧和模型，改用独立输出目录：
+
+```bash
+python scripts/run_mvvbench_prompt_pilot.py \
+  --diagnostic-dir artifacts/EXP-002/diagnostic_run01 \
+  --query-ids 64pm_industry_safety_4-q01281 63am_industry_safety_2-q01180 64pm_retail_3-q01310 iiith_soccer_016_4-q00488 uniandes_dance_016_34-q00822 \
+  --model-path /home/scc/pb22111667/models/Qwen3-VL-8B-Instruct \
+  --output artifacts/EXP-002/diagnostic_run01/prompt_pilot_run02
+```
+
+若运行中断，在相同命令末尾加 `--resume`。重点比较旧版与九宫格条件的实体匹配依据、各自的水平/垂直位移描述、机位推断是否有证据支撑，以及答案是否变化。候选题若不满足脚本的原始筛选条件，移除该题后再运行。
 
 服务器四小时任务中断时，用相同参数和输出路径加 `--resume`。解读时分别报告基线答案变化、匹配帧单视角是否仍正确、公共实体是否匹配准确、关系推断是否有效。只有新提示答对且人工核实证据链有效，才计为“有证据支持的纠正”；5 题仅作流程试跑，不做总体统计结论。
 
