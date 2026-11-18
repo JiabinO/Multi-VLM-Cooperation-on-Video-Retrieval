@@ -164,18 +164,30 @@ def main() -> int:
     }
     signature = hashlib.sha256(json.dumps(basis, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
     args.output.parent.mkdir(parents=True, exist_ok=True)
+    results_path = args.output / "pilot_results.json"
     results: list[dict[str, Any]] = []
     if args.output.exists():
         if not args.resume:
-            parser.error(f"Output exists; use a new path or pass --resume: {args.output}")
-        saved = load_json(args.output)
-        if saved.get("signature") != signature:
-            parser.error("Existing output belongs to different queries/images/model/settings")
-        results = saved.get("results", [])
+            parser.error(f"Output directory exists; use a new path or pass --resume: {args.output}")
+        if results_path.exists():
+            saved = load_json(results_path)
+            if saved.get("signature") != signature:
+                parser.error("Existing output belongs to different queries/images/model/settings")
+            results = saved.get("results", [])
+    args.output.mkdir(parents=True, exist_ok=True)
     done = {(r["query_id"], r["condition"]) for r in results if r.get("status") == "completed"}
 
     runtime = get_runtime(args.model_path)
     print(f"Loaded model once; pilot queries={len(selected)}, pending calls={len(selected) * len(conditions) - len(done)}", flush=True)
+    write_json(results_path, {
+        "created_at": datetime.now(timezone.utc).isoformat(), "signature": signature,
+        "settings": basis, "runtime": runtime.metadata,
+        "interpretation": [
+            "Candidate selection uses prior results; pilot summaries are descriptive, not population estimates.",
+            "Gold answers are used only after generation and are not included in prompts.",
+            "A prompted answer counts as a supported correction only after human review confirms its cited entity links and inference.",
+        ], "candidate_metadata": selected, "results": results,
+    })
     for q in selected:
         options = q["options"]
         all_records = [{"absolute_file": str(x["path"]), "label": f"View {x['view']} frame {i + 1}"}
@@ -219,7 +231,7 @@ def main() -> int:
             results = [old for old in results
                        if (old.get("query_id"), old.get("condition")) != (q["query_id"], condition)]
             results.append(row)
-            write_json(args.output, {
+            write_json(results_path, {
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "signature": signature, "settings": basis,
                 "runtime": runtime.metadata,
@@ -234,7 +246,7 @@ def main() -> int:
                              ensure_ascii=False), flush=True)
             if row["status"] == "completed":
                 done.add((q["query_id"], condition))
-    print(f"Saved {len(results)} condition outputs to {args.output}", flush=True)
+    print(f"Saved {len(results)} condition outputs to {results_path}", flush=True)
     return 0 if all(r.get("status") == "completed" for r in results) else 1
 
 
