@@ -80,6 +80,34 @@ def entity_reasoning_prompt(question: str, options: dict[str, str]) -> str:
 证据要简短且可核验，不编造未见物体，也不要输出隐藏的逐字思维过程，只提供观察和简要理由。"""
 
 
+def entity_reasoning_grid_prompt(question: str, options: dict[str, str]) -> str:
+    option_text = "\n".join(f"{k}. {v}" for k, v in options.items())
+    return f"""已知以下图像来自同一场景的不同摄像机视角。请根据图像回答问题，并仔细记录公共实体在每张图像中的二维位置。
+
+问题：{question}
+选项：
+{option_text}
+
+请按以下步骤分析：
+1. 分别记录每个视角中与问题有关的直接可见事实，并标明视角来源。
+2. 找出可能在多个视角中出现的同一人物、物体或固定地标。说明可核对的匹配依据；只凭类别相同或大致位置相似不足以确认同一实体。无法确认时标记 uncertain，不要强行对应。
+3. 对每个可靠匹配的实体，分别记录其在每个视角画面中的九宫格位置：左上、上中、右上、左中、中心、右中、左下、下中、右下。用“上/中/下 + 左/中/右”组合描述；如位置跨格或不确定，说明这一点。另记录它相对其他可靠实体的位置（例如在三脚架右下方）。
+4. 明确比较同一实体从 View A 到 View B 的画面位移：水平变化（向左/向右/无明显变化）、垂直变化（向上/向下/无明显变化），并给出图像中的参照依据。这里描述的是图像平面变化，不等同于现实场景中的移动或摄像机方位。
+5. 再回答原问题。只有当公共实体的位置关系确实支持某个机位方向时，才据此推断；不能仅凭物体都在画面左侧/右侧或两图构图相似，就断定相机朝向或前后左右。证据不足时选择最可能选项并降低信心，在限制中说明缺少什么证据。
+
+只输出有效 JSON：
+{{
+  "per_view_observations": [{{"view": "View 0", "facts": ["直接可见事实"]}}],
+  "cross_view_links": [{{"entity": "...", "matching_basis": "...", "confidence": "low|medium|high", "positions_by_view": {{"View 0": {{"grid_region": "left_upper|upper_middle|right_upper|left_middle|center|right_middle|left_lower|lower_middle|right_lower|uncertain", "relative_to_entities": "..."}}, "View 3": {{"grid_region": "...", "relative_to_entities": "..."}}}}, "image_plane_change": {{"horizontal": "left|right|no_clear_change|uncertain", "vertical": "up|down|no_clear_change|uncertain", "basis": "..."}}}}],
+  "integration_summary": ["简短说明观察到的位置变化如何支持或不能支持答案；区分观察和推断"],
+  "answer": "A|B|C|D",
+  "confidence": "low|medium|high",
+  "limitations": ["..."]
+}}
+
+证据要简短且可核验，不编造未见物体，也不要输出隐藏的逐字思维过程，只提供观察和简要理由。"""
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--diagnostic-dir", type=Path, required=True,
@@ -151,7 +179,8 @@ def main() -> int:
             "images": all_images,
         })
 
-    conditions = ("matched_single_view", "baseline_multiview", "same_scene_prior", "entity_link_reasoning")
+    conditions = ("matched_single_view", "baseline_multiview", "same_scene_prior",
+                  "entity_link_reasoning", "entity_link_reasoning_9grid")
     basis = {
         "diagnostic_run": str(run_root), "predictions_path": str(predictions_path),
         "model_path": str(args.model_path.resolve()), "queries": [
@@ -202,6 +231,7 @@ def main() -> int:
             "baseline_multiview": (all_records, qa_prompt(q["question"], options), args.qa_max_new_tokens),
             "same_scene_prior": (all_records, scene_prompt, args.qa_max_new_tokens),
             "entity_link_reasoning": (all_records, entity_reasoning_prompt(q["question"], options), args.reasoning_max_new_tokens),
+            "entity_link_reasoning_9grid": (all_records, entity_reasoning_grid_prompt(q["question"], options), args.reasoning_max_new_tokens),
         }
         for condition, (records, prompt, max_tokens) in prompts.items():
             if (q["query_id"], condition) in done:
