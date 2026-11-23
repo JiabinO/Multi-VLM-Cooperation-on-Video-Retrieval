@@ -341,9 +341,21 @@ def run(config_path: Path, questions_path: Path, output: Path, modes: list[str],
                     if metrics.get("reached_token_limit"):
                         audit["truncated_at_token_limit"] = True
                     evidence_payload = {"correct": None, "evidence_audit": audit}
+                    parse_error = None
+                    status = "completed"
+                elif prompt_mode == "general_evidence":
+                    try:
+                        answer, confidence = parse_answer(raw)
+                        parse_error, status = None, "completed"
+                    except Exception as exc:
+                        answer, confidence = None, None
+                        parse_error, status = f"{type(exc).__name__}: {exc}", "parse_error"
+                    evidence_payload = {"correct": answer == q["correct_answer"] if answer else None,
+                                        "parse_error": parse_error}
                 else:
                     answer, confidence = parse_answer(raw)
                     evidence_payload = {}
+                    parse_error, status = None, "completed"
                 if prompt_mode == "evidence":
                     parsed = json.loads(raw.strip())
                     if isinstance(parsed, dict):
@@ -358,12 +370,14 @@ def run(config_path: Path, questions_path: Path, output: Path, modes: list[str],
                     "timestamp_start": q["timestamp_start"], "timestamp_end": q["timestamp_end"],
                     "input_frames": len(records), "input_bytes": nbytes, "answer": answer,
                     "sampled_frames": sampled_frame_info,
-                    "correct_answer": q["correct_answer"], "correct": answer == q["correct_answer"],
-                    "confidence": confidence, "status": "completed", "raw_response": raw, "metrics": metrics})
+                    "correct_answer": q["correct_answer"],
+                    "correct": answer == q["correct_answer"] if answer else None,
+                    "confidence": confidence, "status": status, "raw_response": raw, "metrics": metrics})
                 predictions[-1].update(evidence_payload)
                 write_json(pred_path, predictions)
                 done.add(key)
-                print(f"{len(done)}/{total} {q['query_id']} {cond['condition_id']}: {answer} ({nbytes} B)", flush=True)
+                print(f"{len(done)}/{total} {q['query_id']} {cond['condition_id']}: "
+                      f"{answer or status} ({nbytes} B)", flush=True)
         write_json(output / "predictions.json", predictions)
         meta.update(status="completed", finished_at=datetime.now(timezone.utc).isoformat(),
                     elapsed_seconds=time.perf_counter() - t0)
