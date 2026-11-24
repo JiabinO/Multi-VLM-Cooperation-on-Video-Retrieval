@@ -60,8 +60,9 @@ def answer_letter(value: Any) -> str | None:
 def answer_prompt(question: str, options: dict[str, str], labels: list[str]) -> str:
     return (
         "根据给定图像回答选择题。先核对题目指定的计数对象和属性，再计算选项所问的差值。"
-        "只依据可见内容；模糊或遮挡的对象不要武断计数。只输出 JSON："
-        "{\"answer\":\"A|B|C|D\",\"confidence\":\"low|medium|high\",\"brief_evidence\":\"简短可核对依据\"}。\n"
+        "只依据可见内容；模糊或遮挡的对象不要武断计数。答案必须是 A、B、C、D 之一。"
+        "brief_evidence 最多一句，不要展示反复尝试或长篇推理。只输出 JSON："
+        "{\"answer\":\"A|B|C|D\",\"confidence\":\"low|medium|high\",\"brief_evidence\":\"最多一句依据\"}。\n"
         + "\n".join(labels) + "\n问题：" + question + "\n选项：\n"
         + "\n".join(f"{k}. {v}" for k, v in options.items())
     )
@@ -91,36 +92,112 @@ def graph_extraction_prompt(question: str, view_id: str, frame_info: list[dict[s
     )
 
 
-def graph_fusion_prompt(question: str, options: dict[str, str], graphs: list[dict[str, Any]],
-                        deduplicate: bool) -> str:
-    if deduplicate:
-        instruction = (
-            "中心端任务：先审查不同视角的局部实体，再判断哪些记录可能对应同一台物理显示器。"
-            "不能仅凭类别或相似外观合并；要结合位置关系、外观、周围实体和来源帧。"
-            "匹配状态只能是 same / different / uncertain，并给出简短依据。只有 same 才去重；uncertain 要保留为不确定候选，"
-            "同时报告去重与不确定性对计数的影响。之后分别统计 appears_on 与 appears_off 的实体，"
-            "按题意计算两者数量差的绝对值，并映射到选项。若屏幕状态 uncertain，不要强行归入开或关。"
-        )
-    else:
-        instruction = (
-            "中心端消融条件：禁止跨视角匹配或去重，把各视角端侧记录按记录数直接汇总。"
-            "之后统计 appears_on 与 appears_off 并计算数量差的绝对值。这个条件用于展示重复计数风险，"
-            "不能把它解释为合理的部署策略。"
-        )
-    schema = (
-        "只输出 JSON：{\"cross_view_matches\":[{\"entities\":[{\"view_id\":\"...\",\"local_id\":\"...\"}],"
-        "\"status\":\"same|different|uncertain\",\"basis\":\"...\"}],"
-        "\"count_on\":0,\"count_off\":0,\"count_uncertain\":0,\"difference\":0,"
-        "\"calculation\":\"...\",\"answer\":\"A|B|C|D|unknown\",\"confidence\":\"low|medium|high\","
-        "\"limitations\":[\"...\"]}。"
-    )
+def entity_matching_prompt(question: str, graphs: list[dict[str, Any]]) -> str:
     return (
-        "你是多视角中心融合器。输入是不同摄像机各自生成的查询相关局部证据图。"
-        "局部描述是模型观察，不保证正确；不得把它们当作标注真值。只使用输入证据，不补充未观察到的实体。\n"
-        + instruction + "\n" + schema + "\n问题：" + question + "\n选项：\n"
-        + "\n".join(f"{k}. {v}" for k, v in options.items())
-        + "\n各视角证据图：\n" + json.dumps(graphs, ensure_ascii=False, indent=2)
+        "你是跨视角实体匹配器。不同视角的实体编号只在各自 view 内有效；"
+        "monitor_0 这类编号在不同 view 中重复出现只是命名巧合，绝不能作为匹配依据。"
+        "不要计数、判断答案或推断开关状态。只利用端侧提供的可见外观、位置、相邻实体和关系，"
+        "找出有具体依据的跨视角同一物体候选。外观相似或都属于显示器不足以认定 same。"
+        "若依据不足，标记 uncertain；没有合理候选则省略。每个候选只写一条短依据。只输出 JSON："
+        "{\"matches\":[{\"entities\":[{\"view_id\":\"0\",\"local_id\":\"monitor_0\"},"
+        "{\"view_id\":\"2\",\"local_id\":\"monitor_1\"}],\"status\":\"same|different|uncertain\","
+        "\"basis\":\"可见的对应依据或不足\"}]}。\n"
+        f"问题：{question}\n各视角局部证据图：\n{json.dumps(graphs, ensure_ascii=False, indent=2)}"
     )
+
+
+def count_graphs(graphs: list[dict[str, Any]], options: dict[str, str],
+                 matches: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """Apply transparent count rules; local IDs are always scoped by view_id."""
+    nodes: dict[str, dict[str, Any]] = {}
+    for graph in graphs:
+        view_id = str(graph.get("view_id", "unknown"))
+        for entity in graph.get("entities", []):
+            local_id = str(entity.get("local_id", ""))
+            if not local_id:
+                continue
+            key = f"{view_id}::{local_id}"
+            nodes[key] = {"view_id": view_id, "local_id": local_id,
+                          "state": str(entity.get("screen_state") or "uncertain"),
+                          "evidence": entity.get("evidence", ""),
+                          "position": entity.get("position", "")}
+
+    parent = {key: key for key in nodes}
+
+    def find(key: str) -> str:
+        while parent[key] != key:
+            parent[key] = parent[parent[key]]
+            key = parent[key]
+        return key
+
+    accepted_links = []
+    rejected_links = []
+    for link in matches or []:
+        refs = link.get("entities", [])
+        keys = [f"{str(ref.get('view_id'))}::{str(ref.get('local_id'))}"
+                for ref in refs if isinstance(ref, dict)]
+        if len(keys) != 2 or any(key not in nodes for key in keys):
+            rejected_links.append({"link": link, "reason": "unknown_or_invalid_entity_reference"})
+            continue
+        if nodes[keys[0]]["view_id"] == nodes[keys[1]]["view_id"]:
+            rejected_links.append({"link": link, "reason": "cross_view_link_required"})
+            continue
+        status = link.get("status")
+        if status == "same":
+            a, b = find(keys[0]), find(keys[1])
+            if a != b:
+                a_views = {node["view_id"] for key, node in nodes.items() if find(key) == a}
+                b_views = {node["view_id"] for key, node in nodes.items() if find(key) == b}
+                if a_views & b_views:
+                    rejected_links.append({"link": link, "reason": "would_merge_two_entities_in_same_view"})
+                    continue
+                parent[b] = a
+            accepted_links.append(link)
+        elif status in {"different", "uncertain"}:
+            accepted_links.append(link)
+        else:
+            rejected_links.append({"link": link, "reason": "invalid_match_status"})
+
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for key, node in nodes.items():
+        groups.setdefault(find(key), []).append(node)
+
+    entities = []
+    for group in groups.values():
+        states = {node["state"] for node in group}
+        known = states & {"appears_on", "appears_off"}
+        if known == {"appears_on", "appears_off"}:
+            fused_state = "conflict"
+        elif known == {"appears_on"}:
+            fused_state = "appears_on"
+        elif known == {"appears_off"}:
+            fused_state = "appears_off"
+        else:
+            fused_state = "uncertain"
+        entities.append({"members": [{"view_id": n["view_id"], "local_id": n["local_id"]} for n in group],
+                         "observed_states": sorted(states), "fused_state": fused_state,
+                         "evidence": [{"view_id": n["view_id"], "state": n["state"],
+                                       "evidence": n["evidence"], "position": n["position"]} for n in group]})
+
+    on_count = sum(x["fused_state"] == "appears_on" for x in entities)
+    off_count = sum(x["fused_state"] == "appears_off" for x in entities)
+    unresolved = sum(x["fused_state"] in {"uncertain", "conflict"} for x in entities)
+    possible_differences = sorted({abs((on_count + k) - (off_count + unresolved - k))
+                                   for k in range(unresolved + 1)})
+    option_values: dict[str, int] = {}
+    for letter, text in options.items():
+        match = re.fullmatch(r"\s*(\d+)\s*", str(text))
+        if match:
+            option_values[letter] = int(match.group(1))
+    matching_answers = sorted(letter for letter, value in option_values.items()
+                              if value in possible_differences)
+    answer = matching_answers[0] if unresolved == 0 and len(possible_differences) == 1 and len(matching_answers) == 1 else "unknown"
+    return {"entities_after_fusion": entities, "count_on": on_count, "count_off": off_count,
+            "count_uncertain_or_conflict": unresolved,
+            "known_state_difference": abs(on_count - off_count),
+            "possible_differences_under_unresolved_states": possible_differences,
+            "answer_candidates": matching_answers, "answer": answer,
+            "accepted_match_links": accepted_links, "rejected_match_links": rejected_links}
 
 
 def run(args: argparse.Namespace) -> int:
@@ -181,7 +258,8 @@ def run(args: argparse.Namespace) -> int:
     request_spec = {"query_id": args.query_id, "question": q["question"], "options": options,
                     "correct_answer": gold, "timestamp": [start, end], "views": view_data,
                     "frames_per_view": args.frames_per_view, "point_window_seconds": args.point_window_seconds,
-                    "prompt_version": "local-evidence-graph-v1", "model_path": str(config["model"]["model_path"])}
+                    "token_limits": {"qa": args.qa_tokens, "graph": args.graph_tokens, "matching": args.fusion_tokens},
+                    "prompt_version": "local-evidence-graph-v2", "model_path": str(config["model"]["model_path"])}
     signature = hashlib.sha256(json.dumps(request_spec, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
     out = args.output
     manifest_path, partial_path = out / "manifest.json", out / "predictions.partial.json"
@@ -229,7 +307,10 @@ def run(args: argparse.Namespace) -> int:
             try:
                 row["parsed"] = parse_json_object(raw)
             except Exception as exc:
-                row.update(status="parse_error", parse_error=f"{type(exc).__name__}: {exc}")
+                row.update(status="truncated" if metrics.get("reached_token_limit") else "parse_error",
+                           parse_error=f"{type(exc).__name__}: {exc}")
+            if metrics.get("reached_token_limit"):
+                row["status"] = "truncated"
         except Exception as exc:
             row.update(status="error", error=f"{type(exc).__name__}: {exc}", traceback=traceback.format_exc())
         row["elapsed_seconds"] = round(time.perf_counter() - started, 3)
@@ -240,6 +321,23 @@ def run(args: argparse.Namespace) -> int:
         write_json(partial_path, records)
         print(f"{len(records)} {label}: {row['status']}", flush=True)
         return row
+
+    def save_derived(step_id: str, result: dict[str, Any]) -> None:
+        answer = result.get("answer")
+        row = {"step_id": step_id, "label": step_id,
+               "status": result.get("status", "completed"), "result": result,
+               "answer_letter": answer if answer in set("ABCD") else None,
+               "correct": answer == gold if answer in set("ABCD") else None}
+        existing_i = next((i for i, old in enumerate(records) if old.get("step_id") == step_id), None)
+        if existing_i is None:
+            records.append(row)
+        else:
+            records[existing_i] = row
+        write_json(partial_path, records)
+        print(f"{step_id}: {row['status']} counts=" + json.dumps(
+            {k: result.get(k) for k in ("count_on", "count_off", "count_uncertain_or_conflict",
+                                         "known_state_difference", "answer_candidates", "answer")},
+            ensure_ascii=False), flush=True)
 
     try:
         # First capture visual-only baselines. These are independent answers, not the graph fusion input.
@@ -267,16 +365,31 @@ def run(args: argparse.Namespace) -> int:
             parsed.setdefault("view_id", vid)
             graph_rows.append(parsed)
         if len(graph_rows) == len(view_data):
-            for step_id, label, dedup in (("graph_count_no_dedup", "graph_count_no_dedup", False),
-                                          ("graph_count_dedup", "graph_count_dedup", True)):
-                prompt = graph_fusion_prompt(q["question"], options, graph_rows, dedup)
-                call(step_id, label, [], prompt, args.fusion_tokens)
+            no_dedup = count_graphs(graph_rows, options)
+            save_derived("graph_count_no_dedup", no_dedup)
+            match_row = call("cross_view_entity_matching", "cross_view_entity_matching", [],
+                             entity_matching_prompt(q["question"], graph_rows), args.fusion_tokens)
+            match_data = match_row.get("parsed", {}) if match_row.get("status") == "completed" else {}
+            match_list = match_data.get("matches", [])
+            if not isinstance(match_list, list):
+                match_list = []
+            write_json(out / "cross_view_matches.json", {"matches": match_list,
+                "raw_response": match_row.get("raw_response"), "status": match_row.get("status")})
+            if match_row.get("status") == "completed":
+                save_derived("graph_count_dedup", count_graphs(graph_rows, options, match_list))
+            else:
+                save_derived("graph_count_dedup", {"status": "skipped_match_step_" + str(match_row.get("status"))})
+        elif graph_rows:
+            save_derived("graph_count_no_dedup", {"status": "skipped_missing_view_graphs",
+                         "available_view_graphs": len(graph_rows), "expected_view_graphs": len(view_data)})
+            save_derived("graph_count_dedup", {"status": "skipped_missing_view_graphs"})
         write_json(out / "predictions.json", records)
         write_json(out / "evidence_graphs.json", {"query_id": args.query_id, "question": q["question"],
             "options": options, "correct_answer": gold, "views": graph_rows})
         summary = [{"step_id": r["step_id"], "status": r.get("status"),
                     "answer": r.get("answer_letter"), "correct": r.get("correct"),
-                    "elapsed_seconds": r.get("elapsed_seconds")} for r in records]
+                    "elapsed_seconds": r.get("elapsed_seconds"),
+                    "counts": r.get("result")} for r in records]
         write_json(out / "run.json", {"status": "completed", "runtime": runtime.metadata,
             "finished_at": datetime.now(timezone.utc).isoformat(), "request_signature": signature,
             "completed_steps": [r["step_id"] for r in records if r.get("status") == "completed"],
@@ -291,7 +404,6 @@ def run(args: argparse.Namespace) -> int:
             "request_signature": signature})
         raise
 
-
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", required=True, type=Path)
@@ -301,7 +413,7 @@ def main() -> int:
     parser.add_argument("--view-ids", nargs="+", help="Optional subset of the question's designated views")
     parser.add_argument("--frames-per-view", type=int, default=2)
     parser.add_argument("--point-window-seconds", type=float, default=2.0)
-    parser.add_argument("--qa-tokens", type=int, default=512)
+    parser.add_argument("--qa-tokens", type=int, default=256)
     parser.add_argument("--graph-tokens", type=int, default=1400)
     parser.add_argument("--fusion-tokens", type=int, default=1600)
     parser.add_argument("--resume", action="store_true")
