@@ -11,10 +11,11 @@
 - `single_view_<id>`：单视角图像直接回答原题。
 - `direct_all_views`：全部视角图像直接回答原题。
 - `local_graph_view_<id>`：单视角端侧证据图，不提供候选选项。
-- `graph_count_no_dedup`：中心端按各端记录直接计数，用作去重消融。
-- `graph_count_dedup`：中心端判断跨视角实体对应关系，去重后计数并计算差值。
+- `cross_view_entity_matching`：中心端只判断跨视角实体对应关系；各 view 的 local ID 是局部编号，编号相同不构成匹配证据。
+- `graph_count_no_dedup`：脚本将所有 view 内实体分别保留，再确定性汇总状态和差值，用作不去重对照。
+- `graph_count_dedup`：脚本只根据中心端给出的 `same` 匹配合并实体，再确定性汇总。状态冲突或不确定实体保留在未决计数中，不强制选答案。
 
-所有条件使用相同标注时间窗和每视角相同帧数。该脚本默认每视角 2 帧，零长度时间戳扩展为中心 2 秒窗口；这属于 timestamp-oracle 诊断。输出保留原始响应，解析失败不会覆盖原文。运行可用相同参数加 `--resume` 续跑。
+所有条件使用相同标注时间窗和每视角相同帧数。该脚本默认每视角 2 帧、QA 输出上限 256 tokens，零长度时间戳扩展为中心 2 秒窗口；这属于 timestamp-oracle 诊断。输出保留原始响应；若生成触及 token 上限，会标记为 `truncated`。运行可用相同参数加 `--resume` 续跑。
 
 ## 服务器运行
 
@@ -24,7 +25,7 @@
 python scripts/diagnose_mvvbench_evidence_graph.py \
   --config configs/exp002.local.json \
   --questions artifacts/EXP-002/score_run07/evaluation_questions.json \
-  --output artifacts/EXP-002/display_monitor_graph_run01 \
+  --output artifacts/EXP-002/display_monitor_graph_run02 \
   --query-id 63am_lobby_3-q01190 \
   --frames-per-view 2
 ```
@@ -35,7 +36,7 @@ python scripts/diagnose_mvvbench_evidence_graph.py \
 python scripts/diagnose_mvvbench_evidence_graph.py \
   --config configs/exp002.local.json \
   --questions artifacts/EXP-002/score_run07/evaluation_questions.json \
-  --output artifacts/EXP-002/display_monitor_graph_run01 \
+  --output artifacts/EXP-002/display_monitor_graph_run02 \
   --query-id 63am_lobby_3-q01190 \
   --frames-per-view 2 \
   --resume
@@ -48,14 +49,15 @@ python scripts/diagnose_mvvbench_evidence_graph.py \
 - `sampled_frames.json`：输入帧来源及时间戳。
 - `frames/`：抽取后的图片。
 - `calls/<step>/prompt.txt`、`raw_response.txt`、`metrics.json`：各次调用的提示词、原始输出和模型指标。
-- `predictions.json`：所有条件的结构化回答、解析状态及逐条件正确性。
-- `evidence_graphs.json`：中心融合实际使用的各视角局部图。
+- `predictions.json`：所有模型调用和脚本计算条件的结构化结果、解析状态及逐条件正确性。
+- `evidence_graphs.json`：中心实体匹配实际使用的各视角局部图。
+- `cross_view_matches.json`：原始匹配候选、状态和依据；`same` 才参与去重。
 - `manifest.json`、`run.json`：设置签名、运行状态和条件摘要。
 
 ## 人工分析顺序
 
 1. 看 `local_graph_view_*`：是否漏掉笔记本屏幕、重复识别同一屏幕，或把黑屏错误标成关机。
-2. 看 `graph_count_dedup` 的 `cross_view_matches`：匹配依据是否具体，`uncertain` 是否被保留。
+2. 看 `cross_view_matches.json`：匹配依据是否具体，是否错误地把相同 local ID 当作匹配证据。
 3. 对比 `graph_count_no_dedup` 和 `graph_count_dedup`：判断变化是否来自去重。
 4. 看计数、差值和答案是否与选项一致；最后对照单视角与直接全视角基线。
 
