@@ -59,10 +59,8 @@ def answer_letter(value: Any) -> str | None:
 
 def answer_prompt(question: str, options: dict[str, str], labels: list[str]) -> str:
     return (
-        "根据给定图像回答选择题。先核对题目指定的计数对象和属性，再计算选项所问的差值。"
-        "只依据可见内容；模糊或遮挡的对象不要武断计数。答案必须是 A、B、C、D 之一。"
-        "brief_evidence 最多一句，不要展示反复尝试或长篇推理。只输出 JSON："
-        "{\"answer\":\"A|B|C|D\",\"confidence\":\"low|medium|high\",\"brief_evidence\":\"最多一句依据\"}。\n"
+        "根据给定图像回答选择题，只依据可见内容。核对题目要求并选择最合适的选项。"
+        "只输出一个大写字母 A、B、C 或 D，不要输出解释、标点或其他文字。\n"
         + "\n".join(labels) + "\n问题：" + question + "\n选项：\n"
         + "\n".join(f"{k}. {v}" for k, v in options.items())
     )
@@ -92,7 +90,14 @@ def graph_extraction_prompt(question: str, view_id: str, frame_info: list[dict[s
     )
 
 
-def entity_matching_prompt(question: str, graphs: list[dict[str, Any]]) -> str:
+def entity_matching_prompt(question: str, graphs: list[dict[str, Any]],
+                           visual_grounding: bool = False) -> str:
+    grounding_instruction = (
+        "同时查看附带的原始帧，并根据画面中显示器外观、相邻物体和空间布局验证候选对应；"
+        "每条 same 匹配都要写出可在帧中核对的视觉依据。"
+        if visual_grounding else
+        "当前条件只能使用下方的文字证据图，不得假设看到了原始帧。"
+    )
     return (
         "你是跨视角实体匹配器。不同视角的实体编号只在各自 view 内有效；"
         "monitor_0 这类编号在不同 view 中重复出现只是命名巧合，绝不能作为匹配依据。"
@@ -102,7 +107,8 @@ def entity_matching_prompt(question: str, graphs: list[dict[str, Any]]) -> str:
         "{\"matches\":[{\"entities\":[{\"view_id\":\"0\",\"local_id\":\"monitor_0\"},"
         "{\"view_id\":\"2\",\"local_id\":\"monitor_1\"}],\"status\":\"same|different|uncertain\","
         "\"basis\":\"可见的对应依据或不足\"}]}。\n"
-        f"问题：{question}\n各视角局部证据图：\n{json.dumps(graphs, ensure_ascii=False, indent=2)}"
+        + grounding_instruction + "\n"
+        + f"问题：{question}\n各视角局部证据图：\n{json.dumps(graphs, ensure_ascii=False, indent=2)}"
     )
 
 
@@ -259,7 +265,7 @@ def run(args: argparse.Namespace) -> int:
                     "correct_answer": gold, "timestamp": [start, end], "views": view_data,
                     "frames_per_view": args.frames_per_view, "point_window_seconds": args.point_window_seconds,
                     "token_limits": {"qa": args.qa_tokens, "graph": args.graph_tokens, "matching": args.fusion_tokens},
-                    "prompt_version": "local-evidence-graph-v2", "model_path": str(config["model"]["model_path"])}
+                    "prompt_version": "local-evidence-graph-v3", "model_path": str(config["model"]["model_path"])}
     signature = hashlib.sha256(json.dumps(request_spec, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
     out = args.output
     manifest_path, partial_path = out / "manifest.json", out / "predictions.partial.json"
@@ -291,7 +297,7 @@ def run(args: argparse.Namespace) -> int:
                                              for row in frame_rows])
 
     def call(step_id: str, label: str, records_for_model: list[dict[str, Any]], prompt: str,
-             token_limit: int) -> dict[str, Any]:
+             token_limit: int, answer_only: bool = False) -> dict[str, Any]:
         existing = next((r for r in records if r["step_id"] == step_id and r.get("status") == "completed"), None)
         if existing:
             return existing
@@ -305,7 +311,17 @@ def run(args: argparse.Namespace) -> int:
             (task / "raw_response.txt").write_text(raw, encoding="utf-8")
             row.update(status="completed", raw_response=raw, metrics=metrics)
             try:
-                row["parsed"] = parse_json_object(raw)
+                if answer_only:
+                    try:
+                        row["parsed"] = parse_json_object(raw)
+                    except (json.JSONDecodeError, ValueError):
+                        plain = raw.strip().upper()
+                        if re.fullmatch(r"[ABCD]", plain):
+                            row["parsed"] = {"answer": plain}
+                        else:
+                            raise
+                else:
+                    row["parsed"] = parse_json_object(raw)
             except Exception as exc:
                 row.update(status="truncated" if metrics.get("reached_token_limit") else "parse_error",
                            parse_error=f"{type(exc).__name__}: {exc}")
@@ -316,7 +332,8 @@ def run(args: argparse.Namespace) -> int:
         row["elapsed_seconds"] = round(time.perf_counter() - started, 3)
         if isinstance(row.get("parsed"), dict) and "answer" in row["parsed"]:
             row["answer_letter"] = answer_letter(row["parsed"].get("answer"))
-            row["correct"] = row["answer_letter"] == gold if row["answer_letter"] else None
+            row["correct"] = (row["answer_letter"] == gold
+                               if row["answer_letter"] and row["status"] == "completed" else None)
         records.append(row)
         write_json(partial_path, records)
         print(f"{len(records)} {label}: {row['status']}", flush=True)
@@ -346,11 +363,13 @@ def run(args: argparse.Namespace) -> int:
             images = [{"absolute_file": f["absolute_file"], "label": f"View {vid}, {f['time_s']:.3f}s"}
                       for f in qframes[vid]]
             call(f"single_view_{vid}", f"single_view_{vid}", images,
-                 answer_prompt(q["question"], options, [f"本组图像均来自 View {vid}。"]), args.qa_tokens)
+                 answer_prompt(q["question"], options, [f"本组图像均来自 View {vid}。"]), args.qa_tokens,
+                 answer_only=True)
         all_images = [{"absolute_file": f["absolute_file"], "label": f"View {vid}, {f['time_s']:.3f}s"}
                       for vid, frames in qframes.items() for f in frames]
         call("direct_all_views", "direct_all_views", all_images,
-             answer_prompt(q["question"], options, ["以下图像来自同一场景的多个指定视角；标签标明来源视角。"]), args.qa_tokens)
+             answer_prompt(q["question"], options, ["以下图像来自同一场景的多个指定视角；标签标明来源视角。"]),
+             args.qa_tokens, answer_only=True)
 
         graph_rows = []
         for item in view_data:
@@ -367,18 +386,30 @@ def run(args: argparse.Namespace) -> int:
         if len(graph_rows) == len(view_data):
             no_dedup = count_graphs(graph_rows, options)
             save_derived("graph_count_no_dedup", no_dedup)
-            match_row = call("cross_view_entity_matching", "cross_view_entity_matching", [],
-                             entity_matching_prompt(q["question"], graph_rows), args.fusion_tokens)
-            match_data = match_row.get("parsed", {}) if match_row.get("status") == "completed" else {}
-            match_list = match_data.get("matches", [])
-            if not isinstance(match_list, list):
-                match_list = []
-            write_json(out / "cross_view_matches.json", {"matches": match_list,
-                "raw_response": match_row.get("raw_response"), "status": match_row.get("status")})
-            if match_row.get("status") == "completed":
-                save_derived("graph_count_dedup", count_graphs(graph_rows, options, match_list))
-            else:
-                save_derived("graph_count_dedup", {"status": "skipped_match_step_" + str(match_row.get("status"))})
+            for suffix, use_visual in (("text", False), ("visual", True)):
+                match_step = f"cross_view_entity_matching_{suffix}"
+                match_inputs = []
+                if use_visual:
+                    match_inputs = [
+                        {"absolute_file": qframes[item["view_id"]][0]["absolute_file"],
+                         "label": f"Original grounding frame for View {item['view_id']}"}
+                        for item in view_data
+                    ]
+                match_row = call(match_step, match_step, match_inputs,
+                    entity_matching_prompt(q["question"], graph_rows, visual_grounding=use_visual),
+                    args.fusion_tokens)
+                match_data = match_row.get("parsed", {}) if match_row.get("status") == "completed" else {}
+                match_list = match_data.get("matches", [])
+                if not isinstance(match_list, list):
+                    match_list = []
+                write_json(out / f"cross_view_matches_{suffix}.json", {
+                    "matches": match_list, "raw_response": match_row.get("raw_response"),
+                    "status": match_row.get("status"), "visual_grounding": use_visual})
+                derived_id = f"graph_count_dedup_{suffix}"
+                if match_row.get("status") == "completed":
+                    save_derived(derived_id, count_graphs(graph_rows, options, match_list))
+                else:
+                    save_derived(derived_id, {"status": "skipped_match_step_" + str(match_row.get("status"))})
         elif graph_rows:
             save_derived("graph_count_no_dedup", {"status": "skipped_missing_view_graphs",
                          "available_view_graphs": len(graph_rows), "expected_view_graphs": len(view_data)})
@@ -413,7 +444,7 @@ def main() -> int:
     parser.add_argument("--view-ids", nargs="+", help="Optional subset of the question's designated views")
     parser.add_argument("--frames-per-view", type=int, default=2)
     parser.add_argument("--point-window-seconds", type=float, default=2.0)
-    parser.add_argument("--qa-tokens", type=int, default=256)
+    parser.add_argument("--qa-tokens", type=int, default=64)
     parser.add_argument("--graph-tokens", type=int, default=1400)
     parser.add_argument("--fusion-tokens", type=int, default=1600)
     parser.add_argument("--resume", action="store_true")
