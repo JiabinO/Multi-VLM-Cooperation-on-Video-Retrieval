@@ -43,3 +43,15 @@ python scripts/screen_mvvbench_diagnostic.py \
 默认依据运行清单中的 `prompt_mode` 过滤同类预测，并检查条件覆盖、全视角/单视角/留一视角正确性差异、答案变化、置信度异常和帧数影响。输出 `review_queue.csv`、`screening_report.json`、`review_queue.md` 与说明文件。建议在 VS Code 中预览 `review_queue.md`；其中按题列出触发原因与条件结果，模型输入帧可直接点击打开，无需按任务哈希查找。它只负责排序人工复核候选，不自动证明视角互补或干扰。中断运行可将输入改为 `predictions.partial.json`，但需先查看条件覆盖度。
 
 
+两图空间关系诊断：diagnose_pairwise_view_relation.py 对同一对图片运行盲测、已知同场景不同机位、以及人工确认共同实体三种条件，并交换图像顺序复跑。它使用本地 Qwen3-VL，可断点续跑，适合定性区分共同实体匹配与粗略视角关系推理。执行命令、建议锚点和人工判读表见 ../docs/mvvbench-pairwise-view-relation-diagnostic.md。
+
+锚点位置与画面位移诊断：diagnose_anchor_displacement.py 使用本地 Qwen3-VL 对两张图中的候选锚点报告可见性、3×3 画面位置及 A→B 位移，并交换输入顺序复跑。它只测图像坐标，不推断真实机位。命令见 ../docs/mvvbench-pairwise-view-relation-diagnostic.md。
+
+原题证据化回答诊断：diagnose_mvvbench_question_reasoning.py 对同一选择题分别输入 View 0、View 3 及两者组合，提示模型逐图给出可见事实、跨图对应依据、简短推理摘要、选项排除和不确定性；支持多帧、断点续跑。gold 只保存在结果元数据中，不进入提示词。用于定性定位单图观察、跨图匹配或方位推理环节的错误，命令见 ../docs/mvvbench-pairwise-view-relation-diagnostic.md。
+
+同脚本提供 `both_views_same_scene` 条件：明确给出同场景、不同机位先验，并要求识别固定公共地标、报告位置和解释方位。可通过 `--conditions both_views_same_scene` 只追加这一轮，与此前无先验的 `both_views` 输出对照。
+
+显示器计数局部证据图诊断：`diagnose_mvvbench_evidence_graph.py` 默认针对 `63am_lobby_3-q01190`，并列运行单视角直接问答、全部视角直接问答、逐视角无选项证据图抽取、脚本确定性计数及中心端实体匹配。中心端只输出跨视角匹配候选，local ID 不能作为对应证据；计数和差值由脚本计算，状态冲突或不确定时保留未决结果。它按标注时间窗抽帧，适合单题归因，不能作为总体性能结论。所有模型调用均保留原始响应并支持 `--resume`。实验设计、命令和输出解读见 `../docs/mvvbench-display-monitor-evidence-graph.md`。
+
+High-value 多视角干扰题提示词小试跑：`run_mvvbench_prompt_pilot.py` 从诊断运行的 manifest、predictions 和 `all_views_frames_2` 帧目录读取题目，校验“多视角错、单视角对”候选，并在同一批帧上运行匹配帧单视角、原始多视角 QA、只加同场景先验、同场景加实体关系推理四个条件。整个批次只加载一次 Qwen，逐条件保存、支持断点续跑。具体命令和试跑题目见 ../docs/mvvbench-pairwise-view-relation-diagnostic.md。
+
