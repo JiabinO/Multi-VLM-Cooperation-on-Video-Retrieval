@@ -51,7 +51,7 @@ python scripts/screen_mvvbench_diagnostic.py \
 
 同脚本提供 `both_views_same_scene` 条件：明确给出同场景、不同机位先验，并要求识别固定公共地标、报告位置和解释方位。可通过 `--conditions both_views_same_scene` 只追加这一轮，与此前无先验的 `both_views` 输出对照。
 
-显示器计数局部证据图诊断：`diagnose_mvvbench_evidence_graph.py` 默认针对 `63am_lobby_3-q01190`，并列运行单视角直接问答、全部视角直接问答、逐视角无选项证据图抽取、脚本确定性计数及中心端实体匹配。中心端只输出跨视角匹配候选，local ID 不能作为对应证据；计数和差值由脚本计算，状态冲突或不确定时保留未决结果。它按标注时间窗抽帧，适合单题归因，不能作为总体性能结论。所有模型调用均保留原始响应并支持 `--resume`。实验设计、命令和输出解读见 `../docs/mvvbench-display-monitor-evidence-graph.md`。
+显示器计数局部证据图诊断：`diagnose_mvvbench_evidence_graph.py` 默认针对 `63am_lobby_3-q01190`，运行单视角/全视角简短 QA、逐视角无选项证据图抽取、纯文本匹配与加一张原始帧的视觉匹配对照。中心端只输出跨视角匹配候选，local ID 不能作为对应证据；计数和差值由脚本计算，状态冲突或不确定时保留未决结果。它按标注时间窗抽帧，适合单题归因，不能作为总体性能结论。所有模型调用均保留原始响应并支持 `--resume`。实验设计、命令和输出解读见 `../docs/mvvbench-display-monitor-evidence-graph.md`。
 
 High-value 多视角干扰题提示词小试跑：`run_mvvbench_prompt_pilot.py` 从诊断运行的 manifest、predictions 和 `all_views_frames_2` 帧目录读取题目，校验“多视角错、单视角对”候选，并在同一批帧上运行匹配帧单视角、原始多视角 QA、只加同场景先验、同场景加实体关系推理四个条件。整个批次只加载一次 Qwen，逐条件保存、支持断点续跑。具体命令和试跑题目见 ../docs/mvvbench-pairwise-view-relation-diagnostic.md。
 
