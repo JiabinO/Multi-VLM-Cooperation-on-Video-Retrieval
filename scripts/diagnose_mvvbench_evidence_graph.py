@@ -90,7 +90,56 @@ def graph_extraction_prompt(question: str, view_id: str, frame_info: list[dict[s
     )
 
 
+def make_candidate_pairs(graphs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    entities = []
+    for graph in graphs:
+        view_id = str(graph.get("view_id", "unknown"))
+        for entity in graph.get("entities", []):
+            local_id = str(entity.get("local_id", ""))
+            if local_id:
+                entities.append({"view_id": view_id, "local_id": local_id,
+                                 "category": entity.get("category", "unknown"),
+                                 "appearance": entity.get("appearance", ""),
+                                 "position": entity.get("position", ""),
+                                 "visibility": entity.get("visibility", "unknown"),
+                                 "evidence": entity.get("evidence", "")})
+    pairs = []
+    for i, first in enumerate(entities):
+        for second in entities[i + 1:]:
+            if first["view_id"] == second["view_id"]:
+                continue
+            left, right = sorted((first, second), key=lambda x: (x["view_id"], x["local_id"]))
+            pairs.append({"pair_id": f"P{len(pairs) + 1:03d}",
+                          "left": {k: left[k] for k in ("view_id", "local_id")},
+                          "right": {k: right[k] for k in ("view_id", "local_id")},
+                          "descriptions": [{k: x[k] for k in ("category", "appearance", "position", "visibility", "evidence")}
+                                           for x in (left, right)]})
+    return pairs
+
+
+def normalize_pair_decisions(candidate_pairs: list[dict[str, Any]],
+                             response: dict[str, Any]) -> tuple[list[dict[str, Any]], list[str]]:
+    raw_decisions = response.get("pair_decisions", [])
+    if not isinstance(raw_decisions, list):
+        raw_decisions = []
+    by_id = {str(x.get("pair_id")): x for x in raw_decisions if isinstance(x, dict)}
+    normalized, missing = [], []
+    for pair in candidate_pairs:
+        decision = by_id.get(pair["pair_id"], {})
+        status = decision.get("status")
+        basis = decision.get("basis", "")
+        if status not in {"same", "different", "uncertain"}:
+            status = "uncertain"
+            basis = "模型未为该候选对给出有效判断；按 uncertain 保留。"
+            missing.append(pair["pair_id"])
+        normalized.append({"pair_id": pair["pair_id"],
+                           "entities": [pair["left"], pair["right"]],
+                           "status": status, "basis": basis})
+    return normalized, missing
+
+
 def entity_matching_prompt(question: str, graphs: list[dict[str, Any]],
+                           candidate_pairs: list[dict[str, Any]],
                            visual_grounding: bool = False) -> str:
     grounding_instruction = (
         "同时查看附带的原始帧，并根据画面中显示器外观、相邻物体和空间布局验证候选对应；"
@@ -102,13 +151,15 @@ def entity_matching_prompt(question: str, graphs: list[dict[str, Any]],
         "你是跨视角实体匹配器。不同视角的实体编号只在各自 view 内有效；"
         "monitor_0 这类编号在不同 view 中重复出现只是命名巧合，绝不能作为匹配依据。"
         "不要计数、判断答案或推断开关状态。只利用端侧提供的可见外观、位置、相邻实体和关系，"
-        "找出有具体依据的跨视角同一物体候选。外观相似或都属于显示器不足以认定 same。"
-        "若依据不足，标记 uncertain；没有合理候选则省略。每个候选只写一条短依据。只输出 JSON："
-        "{\"matches\":[{\"entities\":[{\"view_id\":\"0\",\"local_id\":\"monitor_0\"},"
-        "{\"view_id\":\"2\",\"local_id\":\"monitor_1\"}],\"status\":\"same|different|uncertain\","
-        "\"basis\":\"可见的对应依据或不足\"}]}。\n"
+        "对候选清单中的每一对都必须判断，不能省略或只返回same项。"
+        "same表示支持为同一台物理设备，different表示有依据认为不是同一设备，"
+        "uncertain表示无法确定。外观相似或都属于显示器不足以认定same。"
+        "每个basis最多一句，并引用具体可核对线索。只输出 JSON："
+        "{\"pair_decisions\":[{\"pair_id\":\"P001\",\"status\":\"same|different|uncertain\","
+        "\"basis\":\"一句可核对依据\"}]}。\n"
         + grounding_instruction + "\n"
-        + f"问题：{question}\n各视角局部证据图：\n{json.dumps(graphs, ensure_ascii=False, indent=2)}"
+        + f"问题：{question}\n候选配对（必须逐对判断）：\n{json.dumps(candidate_pairs, ensure_ascii=False, indent=2)}"
+        + f"\n各视角局部证据图：\n{json.dumps(graphs, ensure_ascii=False, indent=2)}"
     )
 
 
@@ -136,7 +187,9 @@ def count_graphs(graphs: list[dict[str, Any]], options: dict[str, str],
             key = parent[key]
         return key
 
-    accepted_links = []
+    applied_same_links = []
+    different_links = []
+    uncertain_links = []
     rejected_links = []
     for link in matches or []:
         refs = link.get("entities", [])
@@ -158,9 +211,11 @@ def count_graphs(graphs: list[dict[str, Any]], options: dict[str, str],
                     rejected_links.append({"link": link, "reason": "would_merge_two_entities_in_same_view"})
                     continue
                 parent[b] = a
-            accepted_links.append(link)
-        elif status in {"different", "uncertain"}:
-            accepted_links.append(link)
+            applied_same_links.append(link)
+        elif status == "different":
+            different_links.append(link)
+        elif status == "uncertain":
+            uncertain_links.append(link)
         else:
             rejected_links.append({"link": link, "reason": "invalid_match_status"})
 
@@ -203,7 +258,8 @@ def count_graphs(graphs: list[dict[str, Any]], options: dict[str, str],
             "known_state_difference": abs(on_count - off_count),
             "possible_differences_under_unresolved_states": possible_differences,
             "answer_candidates": matching_answers, "answer": answer,
-            "accepted_match_links": accepted_links, "rejected_match_links": rejected_links}
+            "same_links_applied": applied_same_links, "different_links": different_links,
+            "uncertain_links": uncertain_links, "rejected_links": rejected_links}
 
 
 def run(args: argparse.Namespace) -> int:
@@ -265,7 +321,7 @@ def run(args: argparse.Namespace) -> int:
                     "correct_answer": gold, "timestamp": [start, end], "views": view_data,
                     "frames_per_view": args.frames_per_view, "point_window_seconds": args.point_window_seconds,
                     "token_limits": {"qa": args.qa_tokens, "graph": args.graph_tokens, "matching": args.fusion_tokens},
-                    "prompt_version": "local-evidence-graph-v3", "model_path": str(config["model"]["model_path"])}
+                    "prompt_version": "local-evidence-graph-v4", "model_path": str(config["model"]["model_path"])}
     signature = hashlib.sha256(json.dumps(request_spec, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
     out = args.output
     manifest_path, partial_path = out / "manifest.json", out / "predictions.partial.json"
@@ -386,6 +442,8 @@ def run(args: argparse.Namespace) -> int:
         if len(graph_rows) == len(view_data):
             no_dedup = count_graphs(graph_rows, options)
             save_derived("graph_count_no_dedup", no_dedup)
+            candidate_pairs = make_candidate_pairs(graph_rows)
+            write_json(out / "candidate_entity_pairs.json", {"candidate_pairs": candidate_pairs})
             for suffix, use_visual in (("text", False), ("visual", True)):
                 match_step = f"cross_view_entity_matching_{suffix}"
                 match_inputs = []
@@ -396,14 +454,21 @@ def run(args: argparse.Namespace) -> int:
                         for item in view_data
                     ]
                 match_row = call(match_step, match_step, match_inputs,
-                    entity_matching_prompt(q["question"], graph_rows, visual_grounding=use_visual),
+                    entity_matching_prompt(q["question"], graph_rows, candidate_pairs,
+                                           visual_grounding=use_visual),
                     args.fusion_tokens)
                 match_data = match_row.get("parsed", {}) if match_row.get("status") == "completed" else {}
-                match_list = match_data.get("matches", [])
-                if not isinstance(match_list, list):
-                    match_list = []
+                match_list, missing_pairs = normalize_pair_decisions(candidate_pairs, match_data)
+                decision_rows = match_data.get("pair_decisions", [])
+                if not isinstance(decision_rows, list):
+                    decision_rows = []
                 write_json(out / f"cross_view_matches_{suffix}.json", {
-                    "matches": match_list, "raw_response": match_row.get("raw_response"),
+                    "candidate_pairs": candidate_pairs, "matches": match_list,
+                    "missing_pair_decisions": missing_pairs,
+                    "invalid_decisions": [x for x in decision_rows
+                                          if isinstance(x, dict) and x.get("pair_id") not in
+                                          {p["pair_id"] for p in candidate_pairs}],
+                    "raw_response": match_row.get("raw_response"),
                     "status": match_row.get("status"), "visual_grounding": use_visual})
                 derived_id = f"graph_count_dedup_{suffix}"
                 if match_row.get("status") == "completed":
