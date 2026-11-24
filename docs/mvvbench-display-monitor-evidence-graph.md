@@ -11,8 +11,9 @@
 - `single_view_<id>`：单视角图像直接回答原题。
 - `direct_all_views`：全部视角图像直接回答原题。
 - `local_graph_view_<id>`：单视角端侧证据图，不提供候选选项。
-- `cross_view_entity_matching_text`：中心端只看文字证据图判断跨视角对应。
-- `cross_view_entity_matching_visual`：中心端看文字证据图和每个 view 的一张原始帧，比较视觉 grounding 带来的变化。各 view 的 local ID 是局部编号，编号相同不构成匹配证据。
+- `candidate_entity_pairs.json`：从两视角局部图生成所有跨视角候选屏幕配对。
+- `cross_view_entity_matching_text`：中心端只看文字证据图，对每个候选对逐一判断 same/different/uncertain。
+- `cross_view_entity_matching_visual`：中心端看文字证据图和每个 view 的一张原始帧，对同一批候选对逐一判断。各 view 的 local ID 是局部编号，编号相同不构成匹配证据；漏答配对按 uncertain 处理。
 - `graph_count_no_dedup`：脚本将所有 view 内实体分别保留，再确定性汇总状态和差值，用作不去重对照。
 - `graph_count_dedup_text`、`graph_count_dedup_visual`：脚本分别按文字匹配、视觉匹配的 `same` 候选合并，再确定性汇总。状态冲突或不确定实体保留在未决计数中，不强制选答案。
 
@@ -26,7 +27,7 @@
 python scripts/diagnose_mvvbench_evidence_graph.py \
   --config configs/exp002.local.json \
   --questions artifacts/EXP-002/score_run07/evaluation_questions.json \
-  --output artifacts/EXP-002/display_monitor_graph_run03 \
+  --output artifacts/EXP-002/display_monitor_graph_run04 \
   --query-id 63am_lobby_3-q01190 \
   --frames-per-view 2
 ```
@@ -37,7 +38,7 @@ python scripts/diagnose_mvvbench_evidence_graph.py \
 python scripts/diagnose_mvvbench_evidence_graph.py \
   --config configs/exp002.local.json \
   --questions artifacts/EXP-002/score_run07/evaluation_questions.json \
-  --output artifacts/EXP-002/display_monitor_graph_run03 \
+  --output artifacts/EXP-002/display_monitor_graph_run04 \
   --query-id 63am_lobby_3-q01190 \
   --frames-per-view 2 \
   --resume
@@ -52,13 +53,14 @@ python scripts/diagnose_mvvbench_evidence_graph.py \
 - `calls/<step>/prompt.txt`、`raw_response.txt`、`metrics.json`：各次调用的提示词、原始输出和模型指标。
 - `predictions.json`：所有模型调用和脚本计算条件的结构化结果、解析状态及逐条件正确性。
 - `evidence_graphs.json`：中心实体匹配实际使用的各视角局部图。
-- `cross_view_matches_text.json`、`cross_view_matches_visual.json`：两种匹配条件的候选、状态和依据；`same` 才参与对应条件的去重。
+- `candidate_entity_pairs.json`：送给两种匹配条件的相同候选对清单。
+- `cross_view_matches_text.json`、`cross_view_matches_visual.json`：逐候选配对的判断、依据和漏答列表；只有 same 才参与对应条件的去重。
 - `manifest.json`、`run.json`：设置签名、运行状态和条件摘要。
 
 ## 人工分析顺序
 
 1. 看 `local_graph_view_*`：是否漏掉笔记本屏幕、重复识别同一屏幕，或把黑屏错误标成关机。
-2. 对比两份 `cross_view_matches_*.json`：图像 grounding 是否带来更具体的匹配依据，是否错误地把相同 local ID 当作证据。
+2. 对比两份 `cross_view_matches_*.json`：图像 grounding 是否带来更具体的匹配依据，所有候选配对是否得到判断，是否错误地把相同 local ID 当作证据。
 3. 对比 `graph_count_no_dedup`、`graph_count_dedup_text` 和 `graph_count_dedup_visual`：判断视觉 grounding 是否改变实体去重与最终计数。
 4. 看计数、差值和答案是否与选项一致；最后对照单视角与直接全视角基线。
 
