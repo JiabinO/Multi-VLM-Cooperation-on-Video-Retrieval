@@ -1,0 +1,29 @@
+[
+  {
+    "query_id": "synthetic-q1",
+    "condition": "all",
+    "answer": "yes",
+    "selected_clip_ids": [
+      "c1",
+      "c2",
+      "c3"
+    ]
+  },
+  {
+    "query_id": "synthetic-q1",
+    "condition": "dedup",
+    "answer": "yes",
+    "selected_clip_ids": [
+      "c1",
+      "c3"
+    ]
+  },
+  {
+    "query_id": "synthetic-q1",
+    "condition": "bad_drop",
+    "answer": "no",
+    "selected_clip_ids": [
+      "c1"
+    ]
+  }
+]

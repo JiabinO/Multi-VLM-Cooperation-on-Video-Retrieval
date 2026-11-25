@@ -1,0 +1,26 @@
+{
+  "review_version": "human-semantic-v1",
+  "review_date": "2026-10-26",
+  "reviewer": "user",
+  "review_basis": "用户重新观看 W02 后在本聊天确认；非盲评，非官方标注修订",
+  "run_id": "W02_qa_run01",
+  "code_commit": "e94d81a456dea4a50ae75eb771faf6c23a69113e",
+  "original_reference_answer": "钩子部件",
+  "reviewed_reference_answer": "铲斗部件",
+  "reference_revision_reason": "用户人工复核确认拆下的是铲斗，接受指向同一组件的语义描述；保留原始运行答案和参考答案",
+  "rubric": {
+    "correct": "名称同义或描述足以确认实际拆下的同一组件",
+    "partial": "部分事实正确，但描述不足以唯一确定目标组件",
+    "incorrect": "指向其他组件或与实际动作相矛盾",
+    "unresolved": "证据不足，需进一步人工核查",
+    "frame_citation": "仅核查附加事实，不作为主要理解指标或答案加分项"
+  },
+  "groups": {
+    "full": {"verdict": "incorrect", "reason": "回答履带，指错组件"},
+    "C10095": {"verdict": "correct", "reason": "铲斗或前端作业装置的描述指向实际拆下组件"},
+    "C10115": {"verdict": "correct", "reason": "正确识别铲斗", "additional_fact_review": "帧 6、7 中操作者持握该部件的描述符合画面"},
+    "C10118": {"verdict": "correct", "reason": "正确识别铲斗"},
+    "C10095+C10115": {"verdict": "correct", "reason": "铲斗或前端作业装置的描述指向实际拆下组件"}
+  },
+  "limitations": "同一问题的五个输入条件，不是五个独立样本；不能据此证明视角冗余、因果干扰或通信节省。"
+}

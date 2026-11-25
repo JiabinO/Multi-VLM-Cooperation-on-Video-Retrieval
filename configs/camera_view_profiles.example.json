@@ -1,0 +1,18 @@
+{
+  "schema_version": "camera-view-profile-v1",
+  "instructions": "Copy to a run-specific JSON file. Fill view_coverage only from human-reviewed observations and set approved=true after review. Do not paste unreviewed model drafts.",
+  "profiles": {
+    "C10095": {
+      "approved": false,
+      "view_coverage": ""
+    },
+    "C10115": {
+      "approved": false,
+      "view_coverage": ""
+    },
+    "C10118": {
+      "approved": false,
+      "view_coverage": ""
+    }
+  }
+}
