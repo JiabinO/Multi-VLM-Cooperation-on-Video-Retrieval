@@ -1,0 +1,9 @@
+{
+    "experiment_id": "mvrem-connectivity-test",
+    "synthetic": true,
+    "status": "success",
+    "metrics": {
+        "accuracy": 0.75,
+        "num_samples": 4
+    }
+}
