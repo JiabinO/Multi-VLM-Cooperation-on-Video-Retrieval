@@ -1,0 +1,9 @@
+{
+  "experiment_id": "mvrem-slurm-probe",
+  "synthetic": true,
+  "hostname": "anode01",
+  "job_id": "201394",
+  "credential_access": "OK",
+  "github_http_code": "200",
+  "timestamp": "2026-11-26T13:10:14+08:00"
+}
